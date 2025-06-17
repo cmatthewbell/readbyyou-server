@@ -7,6 +7,7 @@ import {
   updateBookCategories,
   updateReadingTime,
   updateVoice,
+  generateVoiceDemo,
   completeVoiceDemo,
   handlePremiumTrial,
   completeOnboarding 
@@ -42,6 +43,9 @@ router.post('/onboarding/reading-time', authenticateUser, updateReadingTime);
 
 // POST /auth/onboarding/voice - Submit voice recording/upload for cloning
 router.post('/onboarding/voice', authenticateUser, updateVoice);
+
+// POST /auth/onboarding/voice-demo/generate - Generate voice demo audio
+router.post('/onboarding/voice-demo/generate', authenticateUser, generateVoiceDemo);
 
 // POST /auth/onboarding/voice-demo - Mark voice demo as completed
 router.post('/onboarding/voice-demo', authenticateUser, completeVoiceDemo);

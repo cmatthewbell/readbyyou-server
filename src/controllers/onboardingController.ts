@@ -409,6 +409,112 @@ export const updateVoice = asyncHandler(async (req: Request, res: Response) => {
   }
 });
 
+// POST /auth/onboarding/voice-demo/generate - Generate voice demo audio
+export const generateVoiceDemo = asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.user?.id;
+
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      message: 'User not authenticated'
+    });
+  }
+
+  const profile = await prisma.userProfile.findUnique({
+    where: { user_id: userId }
+  });
+
+  if (!profile) {
+    return res.status(404).json({
+      success: false,
+      message: 'User profile not found'
+    });
+  }
+
+  if (!validateStepProgression(profile.onboarding_step, OnboardingStep.VOICE_DEMO)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid onboarding step progression'
+    });
+  }
+
+  // Get user's voice clone
+  const userVoice = await prisma.userVoice.findFirst({
+    where: { 
+      user_id: userId,
+      is_default: true 
+    }
+  });
+
+  if (!userVoice) {
+    return res.status(404).json({
+      success: false,
+      message: 'No voice clone found. Please complete voice setup first.'
+    });
+  }
+
+  // Demo text passage - Short and engaging fantasy (Public Domain)
+  const demoText = `The magic thrummed through her veins like liquid fire. With a whispered incantation, she opened the portal to another world. Beyond the shimmering gateway, ancient forests beckoned with promises of adventure and secrets long forgotten.`;
+
+  try {
+    // Generate audio using ElevenLabs TTS with user's voice clone
+    const audio = await elevenlabs.textToSpeech.convert(userVoice.elevenlabs_voice_id, {
+      text: demoText,
+      modelId: "eleven_multilingual_v2",
+      voiceSettings: {
+        stability: 0.95,
+        similarityBoost: 0.75,
+        style: 0.06,
+        useSpeakerBoost: true
+      }
+    });
+
+    // Convert audio stream to buffer
+    const chunks: Buffer[] = [];
+    
+    audio.on('data', (chunk: Buffer) => {
+      chunks.push(chunk);
+    });
+    
+    await new Promise((resolve, reject) => {
+      audio.on('end', resolve);
+      audio.on('error', reject);
+    });
+    
+    const audioBuffer = Buffer.concat(chunks);
+    const base64Audio = audioBuffer.toString('base64');
+
+    // Mark voice demo step as completed and progress to premium trial
+    await prisma.userProfile.update({
+      where: { user_id: userId },
+      data: {
+        onboarding_step: OnboardingStep.PREMIUM_TRIAL
+      }
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Voice demo generated successfully',
+      data: {
+        audio_base64: base64Audio,
+        text: demoText,
+        voice_name: userVoice.voice_name,
+        duration_estimate: Math.ceil(demoText.length / 10), // Rough estimate: ~10 chars per second
+        currentStep: OnboardingStep.PREMIUM_TRIAL
+      }
+    });
+
+  } catch (error: any) {
+    console.error('ElevenLabs TTS Error:', error);
+    
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to generate voice demo. Please try again.',
+      error: error.message || 'Unknown error'
+    });
+  }
+});
+
 // POST /auth/onboarding/voice-demo - Mark voice demo as completed
 export const completeVoiceDemo = asyncHandler(async (req: Request, res: Response) => {
   const userId = req.user?.id;
