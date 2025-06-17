@@ -1,0 +1,106 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum AgeGroup {
+  UNDER_20     @map("under_20")
+  TWENTIES     @map("20s")
+  THIRTIES     @map("30s")
+  FORTIES      @map("40s")
+  FIFTIES      @map("50s")
+  SIXTIES      @map("60s")
+  SEVENTY_PLUS @map("70_and_above")
+}
+
+enum ReadingTime {
+  LESS_THAN_15  @map("less_than_15")
+  FIFTEEN_TO_30 @map("15_to_30")
+  THIRTY_TO_60  @map("30_to_60")
+  ONE_TO_TWO    @map("1_to_2_hours")
+  TWO_PLUS      @map("2_hours_plus")
+}
+
+enum ReferralSource {
+  GOOGLE_SEARCH @map("google_search")
+  YOUTUBE       @map("youtube")
+  TIKTOK        @map("tiktok")
+  FACEBOOK      @map("facebook")
+  INSTAGRAM     @map("instagram")
+  OTHER         @map("other")
+}
+
+enum OnboardingStep {
+  GENDER      @map("gender")
+  AGE         @map("age")
+  NAME        @map("name")
+  CATEGORIES  @map("categories")
+  PREFERENCES @map("preferences")
+  COMPLETED   @map("completed")
+}
+
+enum BookCategory {
+  ROMANTASY            @map("romantasy")
+  DARK_ROMANCE         @map("dark_romance")
+  CONTEMPORARY_ROMANCE @map("contemporary_romance")
+  YA_FANTASY           @map("ya_fantasy")
+  THRILLER_MYSTERY     @map("thriller_mystery")
+  SAD_GIRL_FICTION     @map("sad_girl_fiction")
+  LGBTQ_ROMANCE        @map("lgbtq_romance")
+  CLASSIC_LIT          @map("classic_lit")
+  COZY_MYSTERY         @map("cozy_mystery")
+  SCI_FI_DYSTOPIAN     @map("sci_fi_dystopian")
+  HISTORICAL_ROMANCE   @map("historical_romance")
+  SMUT_SPICE           @map("smut_spice")
+  ENEMIES_TO_LOVERS    @map("enemies_to_lovers")
+  COMING_OF_AGE        @map("coming_of_age")
+  FANTASY_NON_ROMANTIC @map("fantasy_non_romantic")
+}
+
+model User {
+  id          String   @id @default(uuid())
+  email       String   @unique
+  provider_id String   @unique // Apple/Google ID
+  provider    String // 'apple' or 'google'
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  // Relations
+  profile UserProfile?
+
+  @@map("users")
+}
+
+model UserProfile {
+  id      String @id @default(uuid())
+  user_id String @unique
+  user    User   @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  // Onboarding fields
+  gender             String?
+  age_group          AgeGroup?
+  first_name         String?
+  book_categories    BookCategory[] // Array of selected categories
+  daily_reading_time ReadingTime?
+  referral_source    ReferralSource?
+
+  // Progress tracking
+  onboarding_step      OnboardingStep @default(GENDER)
+  onboarding_completed Boolean        @default(false)
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@map("user_profiles")
+}

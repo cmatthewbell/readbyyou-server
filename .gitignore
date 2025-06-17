@@ -178,3 +178,4 @@ docs/
 test-results/
 playwright-report/
 test-results.xml 
+/src/generated/prisma
