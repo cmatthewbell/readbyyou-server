@@ -13,8 +13,7 @@ export const getAuthUrl = async (req: Request, res: Response) => {
         message: 'Invalid provider. Use "google" or "apple"',
         error: 'INVALID_PROVIDER'
       };
-      res.status(400).json(errorResponse);
-      return;
+      return res.status(400).json(errorResponse);
     }
 
     const { data, error } = await supabase.auth.signInWithOAuth({
@@ -35,8 +34,7 @@ export const getAuthUrl = async (req: Request, res: Response) => {
         message: 'Failed to generate OAuth URL',
         error: error.message
       };
-      res.status(500).json(errorResponse);
-      return;
+      return res.status(500).json(errorResponse);
     }
 
     const response: ApiResponse = {
@@ -48,7 +46,7 @@ export const getAuthUrl = async (req: Request, res: Response) => {
       }
     };
 
-    res.status(200).json(response);
+    return res.status(200).json(response);
   } catch (error) {
     console.error('Auth URL error:', error);
     const errorResponse: ApiResponse = {
@@ -56,7 +54,7 @@ export const getAuthUrl = async (req: Request, res: Response) => {
       message: 'Failed to initiate OAuth',
       error: error instanceof Error ? error.message : 'Unknown error'
     };
-    res.status(500).json(errorResponse);
+    return res.status(500).json(errorResponse);
   }
 };
 
@@ -72,8 +70,7 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
         message: 'OAuth authentication failed',
         error: authError
       };
-      res.status(400).json(errorResponse);
-      return;
+      return res.status(400).json(errorResponse);
     }
 
     if (!code) {
@@ -82,8 +79,7 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
         message: 'Authorization code missing',
         error: 'MISSING_CODE'
       };
-      res.status(400).json(errorResponse);
-      return;
+      return res.status(400).json(errorResponse);
     }
 
     // Exchange code for session
@@ -96,8 +92,7 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
         message: 'Failed to exchange code for session',
         error: error?.message || 'Unknown error'
       };
-      res.status(400).json(errorResponse);
-      return;
+      return res.status(400).json(errorResponse);
     }
 
     const { user, session } = data;
@@ -124,7 +119,7 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
       await prisma.userProfile.create({
         data: {
           user_id: dbUser.id,
-          onboarding_step: 'GENDER',
+          onboarding_step: 'AGE',
           onboarding_completed: false
         }
       });
@@ -147,7 +142,7 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
       data: authResponse
     };
 
-    res.status(200).json(response);
+    return res.status(200).json(response);
   } catch (error) {
     console.error('Auth callback error:', error);
     const errorResponse: ApiResponse = {
@@ -155,7 +150,7 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
       message: 'Authentication callback failed',
       error: error instanceof Error ? error.message : 'Unknown error'
     };
-    res.status(500).json(errorResponse);
+    return res.status(500).json(errorResponse);
   }
 };
 
@@ -167,8 +162,7 @@ export const getUserInfo = async (req: Request, res: Response) => {
         message: 'User not authenticated',
         error: 'UNAUTHORIZED'
       };
-      res.status(401).json(errorResponse);
-      return;
+      return res.status(401).json(errorResponse);
     }
 
     // Get user with profile
@@ -185,8 +179,7 @@ export const getUserInfo = async (req: Request, res: Response) => {
         message: 'User not found',
         error: 'USER_NOT_FOUND'
       };
-      res.status(404).json(errorResponse);
-      return;
+      return res.status(404).json(errorResponse);
     }
 
     const response: ApiResponse = {
@@ -206,7 +199,7 @@ export const getUserInfo = async (req: Request, res: Response) => {
       }
     };
 
-    res.status(200).json(response);
+    return res.status(200).json(response);
   } catch (error) {
     console.error('Get user info error:', error);
     const errorResponse: ApiResponse = {
@@ -214,7 +207,7 @@ export const getUserInfo = async (req: Request, res: Response) => {
       message: 'Failed to retrieve user info',
       error: error instanceof Error ? error.message : 'Unknown error'
     };
-    res.status(500).json(errorResponse);
+    return res.status(500).json(errorResponse);
   }
 };
 
@@ -238,7 +231,7 @@ export const logout = async (req: Request, res: Response) => {
       message: 'Logged out successfully'
     };
 
-    res.status(200).json(response);
+    return res.status(200).json(response);
   } catch (error) {
     console.error('Logout error:', error);
     const errorResponse: ApiResponse = {
@@ -246,6 +239,6 @@ export const logout = async (req: Request, res: Response) => {
       message: 'Logout failed',
       error: error instanceof Error ? error.message : 'Unknown error'
     };
-    res.status(500).json(errorResponse);
+    return res.status(500).json(errorResponse);
   }
 }; 

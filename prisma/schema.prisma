@@ -42,12 +42,15 @@ enum ReferralSource {
 }
 
 enum OnboardingStep {
-  GENDER      @map("gender")
-  AGE         @map("age")
-  NAME        @map("name")
-  CATEGORIES  @map("categories")
-  PREFERENCES @map("preferences")
-  COMPLETED   @map("completed")
+  AGE           @map("age")
+  NAME          @map("name")
+  CATEGORIES    @map("categories")
+  READING_TIME  @map("reading_time")
+  VOICE         @map("voice")
+  VOICE_DEMO    @map("voice_demo")
+  PREMIUM_TRIAL @map("premium_trial")
+  REFERRAL      @map("referral")
+  COMPLETED     @map("completed")
 }
 
 enum BookCategory {
@@ -78,6 +81,7 @@ model User {
 
   // Relations
   profile UserProfile?
+  voices  UserVoice[]
 
   @@map("users")
 }
@@ -88,7 +92,6 @@ model UserProfile {
   user    User   @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   // Onboarding fields
-  gender             String?
   age_group          AgeGroup?
   first_name         String?
   book_categories    BookCategory[] // Array of selected categories
@@ -96,11 +99,29 @@ model UserProfile {
   referral_source    ReferralSource?
 
   // Progress tracking
-  onboarding_step      OnboardingStep @default(GENDER)
+  onboarding_step      OnboardingStep @default(AGE)
   onboarding_completed Boolean        @default(false)
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
   @@map("user_profiles")
+}
+
+model UserVoice {
+  id      String @id @default(uuid())
+  user_id String
+  user    User   @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  // Voice details
+  voice_name          String // User-provided name for the voice
+  elevenlabs_voice_id String  @unique // ElevenLabs API voice ID
+  audio_file_url      String? // Optional: URL to original audio file
+
+  // Metadata
+  is_default Boolean  @default(false)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@map("user_voices")
 }

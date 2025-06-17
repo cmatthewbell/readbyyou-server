@@ -2,11 +2,13 @@ import { Router } from 'express';
 import { getAuthUrl, handleAuthCallback, getUserInfo, logout } from '../controllers/authController';
 import { 
   getOnboardingStatus,
-  updateGender,
   updateAgeGroup,
   updateName,
   updateBookCategories,
   updateReadingTime,
+  updateVoice,
+  completeVoiceDemo,
+  handlePremiumTrial,
   completeOnboarding 
 } from '../controllers/onboardingController';
 import { authenticateUser } from '../middleware/auth';
@@ -26,9 +28,6 @@ router.get('/me', authenticateUser, getUserInfo);
 router.post('/logout', authenticateUser, logout);
 
 // Onboarding routes
-// POST /auth/onboarding/gender - Submit gender selection
-router.post('/onboarding/gender', authenticateUser, updateGender);
-
 // POST /auth/onboarding/age-group - Submit age group selection
 router.post('/onboarding/age-group', authenticateUser, updateAgeGroup);
 
@@ -40,6 +39,15 @@ router.post('/onboarding/book-categories', authenticateUser, updateBookCategorie
 
 // POST /auth/onboarding/reading-time - Submit daily reading time preference
 router.post('/onboarding/reading-time', authenticateUser, updateReadingTime);
+
+// POST /auth/onboarding/voice - Submit voice recording/upload for cloning
+router.post('/onboarding/voice', authenticateUser, updateVoice);
+
+// POST /auth/onboarding/voice-demo - Mark voice demo as completed
+router.post('/onboarding/voice-demo', authenticateUser, completeVoiceDemo);
+
+// POST /auth/onboarding/premium-trial - Handle premium trial signup
+router.post('/onboarding/premium-trial', authenticateUser, handlePremiumTrial);
 
 // POST /auth/onboarding/referral-source - Submit referral source and complete onboarding
 router.post('/onboarding/referral-source', authenticateUser, completeOnboarding);

@@ -1,17 +1,26 @@
 import { Request, Response } from 'express';
 import { PrismaClient, OnboardingStep, AgeGroup, ReadingTime, ReferralSource, BookCategory } from '@prisma/client';
 import { asyncHandler } from '../utils/asyncHandler';
+import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 
 const prisma = new PrismaClient();
+
+// Initialize ElevenLabs client
+const elevenlabs = new ElevenLabsClient({
+  apiKey: process.env.ELEVENLABS_API_KEY,
+});
 
 // Helper function to validate onboarding step progression
 const validateStepProgression = (currentStep: OnboardingStep, requiredStep: OnboardingStep): boolean => {
   const stepOrder = [
-    OnboardingStep.GENDER,
     OnboardingStep.AGE,
     OnboardingStep.NAME,
     OnboardingStep.CATEGORIES,
-    OnboardingStep.PREFERENCES,
+    OnboardingStep.READING_TIME,
+    OnboardingStep.VOICE,
+    OnboardingStep.VOICE_DEMO,
+    OnboardingStep.PREMIUM_TRIAL,
+    OnboardingStep.REFERRAL,
     OnboardingStep.COMPLETED
   ];
   
@@ -23,110 +32,71 @@ const validateStepProgression = (currentStep: OnboardingStep, requiredStep: Onbo
 
 // GET /auth/onboarding/status - Get current onboarding status
 export const getOnboardingStatus = asyncHandler(async (req: Request, res: Response) => {
-  const userId = req.user!.id;
+  const userId = req.user?.id;
 
-  const userProfile = await prisma.userProfile.findUnique({
+  const profile = await prisma.userProfile.findUnique({
     where: { user_id: userId },
-    select: {
-      onboarding_step: true,
-      onboarding_completed: true,
-      gender: true,
-      age_group: true,
-      first_name: true,
-      book_categories: true,
-      daily_reading_time: true,
-      referral_source: true
+    include: {
+      user: {
+        include: {
+          voices: true
+        }
+      }
     }
   });
 
-  if (!userProfile) {
-    res.status(404).json({ error: 'User profile not found' });
-    return;
-  }
-
-  res.json({
-    current_step: userProfile.onboarding_step,
-    completed: userProfile.onboarding_completed,
-    profile_data: {
-      gender: userProfile.gender,
-      age_group: userProfile.age_group,
-      first_name: userProfile.first_name,
-      book_categories: userProfile.book_categories,
-      daily_reading_time: userProfile.daily_reading_time,
-      referral_source: userProfile.referral_source
-    }
-  });
-});
-
-// POST /auth/onboarding/gender - Submit gender selection
-export const updateGender = asyncHandler(async (req: Request, res: Response) => {
-  const userId = req.user!.id;
-  const { gender } = req.body;
-
-  if (!gender || !['male', 'female', 'non_binary', 'prefer_not_to_say'].includes(gender)) {
-    res.status(400).json({ error: 'Valid gender is required' });
-    return;
-  }
-
-  const userProfile = await prisma.userProfile.findUnique({
-    where: { user_id: userId }
-  });
-
-  if (!userProfile) {
-    res.status(404).json({ error: 'User profile not found' });
-    return;
-  }
-
-  if (!validateStepProgression(userProfile.onboarding_step, OnboardingStep.GENDER)) {
-    res.status(400).json({ 
-      error: 'Invalid step progression',
-      current_step: userProfile.onboarding_step,
-      required_step: OnboardingStep.GENDER
+  if (!profile) {
+    return res.status(404).json({
+      success: false,
+      message: 'User profile not found'
     });
-    return;
   }
 
-  const updatedProfile = await prisma.userProfile.update({
-    where: { user_id: userId },
+  return res.status(200).json({
+    success: true,
     data: {
-      gender,
-      onboarding_step: OnboardingStep.AGE
+      currentStep: profile.onboarding_step,
+      completed: profile.onboarding_completed,
+      profile: {
+        age_group: profile.age_group,
+        first_name: profile.first_name,
+        book_categories: profile.book_categories,
+        daily_reading_time: profile.daily_reading_time,
+        referral_source: profile.referral_source
+      },
+      voices: profile.user.voices
     }
-  });
-
-  res.json({
-    message: 'Gender updated successfully',
-    next_step: OnboardingStep.AGE,
-    profile: updatedProfile
   });
 });
 
 // POST /auth/onboarding/age-group - Submit age group selection
 export const updateAgeGroup = asyncHandler(async (req: Request, res: Response) => {
-  const userId = req.user!.id;
+  const userId = req.user?.id;
   const { age_group } = req.body;
 
   if (!age_group || !Object.values(AgeGroup).includes(age_group)) {
-    res.status(400).json({ error: 'Valid age group is required' });
-    return;
+    return res.status(400).json({
+      success: false,
+      message: 'Valid age group is required'
+    });
   }
 
-  const userProfile = await prisma.userProfile.findUnique({
+  const profile = await prisma.userProfile.findUnique({
     where: { user_id: userId }
   });
 
-  if (!userProfile) {
-    res.status(404).json({ error: 'User profile not found' });
-    return;
+  if (!profile) {
+    return res.status(404).json({
+      success: false,
+      message: 'User profile not found'
+    });
   }
 
-  if (!validateStepProgression(userProfile.onboarding_step, OnboardingStep.AGE)) {
-    res.status(400).json({ 
-      error: 'Invalid step progression',
-      current_step: userProfile.onboarding_step,
-      required_step: OnboardingStep.AGE
+  if (!validateStepProgression(profile.onboarding_step, OnboardingStep.AGE)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid onboarding step progression'
     });
-    return;
   }
 
   const updatedProfile = await prisma.userProfile.update({
@@ -137,39 +107,44 @@ export const updateAgeGroup = asyncHandler(async (req: Request, res: Response) =
     }
   });
 
-  res.json({
+  return res.status(200).json({
+    success: true,
     message: 'Age group updated successfully',
-    next_step: OnboardingStep.NAME,
-    profile: updatedProfile
+    data: {
+      currentStep: updatedProfile.onboarding_step,
+      age_group: updatedProfile.age_group
+    }
   });
 });
 
 // POST /auth/onboarding/name - Submit name
 export const updateName = asyncHandler(async (req: Request, res: Response) => {
-  const userId = req.user!.id;
+  const userId = req.user?.id;
   const { first_name } = req.body;
 
   if (!first_name || typeof first_name !== 'string' || first_name.trim().length === 0) {
-    res.status(400).json({ error: 'Valid first name is required' });
-    return;
+    return res.status(400).json({
+      success: false,
+      message: 'First name is required'
+    });
   }
 
-  const userProfile = await prisma.userProfile.findUnique({
+  const profile = await prisma.userProfile.findUnique({
     where: { user_id: userId }
   });
 
-  if (!userProfile) {
-    res.status(404).json({ error: 'User profile not found' });
-    return;
+  if (!profile) {
+    return res.status(404).json({
+      success: false,
+      message: 'User profile not found'
+    });
   }
 
-  if (!validateStepProgression(userProfile.onboarding_step, OnboardingStep.NAME)) {
-    res.status(400).json({ 
-      error: 'Invalid step progression',
-      current_step: userProfile.onboarding_step,
-      required_step: OnboardingStep.NAME
+  if (!validateStepProgression(profile.onboarding_step, OnboardingStep.NAME)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid onboarding step progression'
     });
-    return;
   }
 
   const updatedProfile = await prisma.userProfile.update({
@@ -180,21 +155,26 @@ export const updateName = asyncHandler(async (req: Request, res: Response) => {
     }
   });
 
-  res.json({
+  return res.status(200).json({
+    success: true,
     message: 'Name updated successfully',
-    next_step: OnboardingStep.CATEGORIES,
-    profile: updatedProfile
+    data: {
+      currentStep: updatedProfile.onboarding_step,
+      first_name: updatedProfile.first_name
+    }
   });
 });
 
 // POST /auth/onboarding/book-categories - Submit book category preferences
 export const updateBookCategories = asyncHandler(async (req: Request, res: Response) => {
-  const userId = req.user!.id;
+  const userId = req.user?.id;
   const { book_categories } = req.body;
 
-  if (!Array.isArray(book_categories) || book_categories.length === 0) {
-    res.status(400).json({ error: 'At least one book category must be selected' });
-    return;
+  if (!book_categories || !Array.isArray(book_categories) || book_categories.length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'At least one book category must be selected'
+    });
   }
 
   // Validate all categories are valid enum values
@@ -202,96 +182,357 @@ export const updateBookCategories = asyncHandler(async (req: Request, res: Respo
   const invalidCategories = book_categories.filter(cat => !validCategories.includes(cat));
   
   if (invalidCategories.length > 0) {
-    res.status(400).json({ 
-      error: 'Invalid book categories',
-      invalid_categories: invalidCategories,
-      valid_categories: validCategories
+    return res.status(400).json({
+      success: false,
+      message: `Invalid book categories: ${invalidCategories.join(', ')}`
     });
-    return;
   }
 
-  const userProfile = await prisma.userProfile.findUnique({
+  const profile = await prisma.userProfile.findUnique({
     where: { user_id: userId }
   });
 
-  if (!userProfile) {
-    res.status(404).json({ error: 'User profile not found' });
-    return;
+  if (!profile) {
+    return res.status(404).json({
+      success: false,
+      message: 'User profile not found'
+    });
   }
 
-  if (!validateStepProgression(userProfile.onboarding_step, OnboardingStep.CATEGORIES)) {
-    res.status(400).json({ 
-      error: 'Invalid step progression',
-      current_step: userProfile.onboarding_step,
-      required_step: OnboardingStep.CATEGORIES
+  if (!validateStepProgression(profile.onboarding_step, OnboardingStep.CATEGORIES)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid onboarding step progression'
     });
-    return;
   }
 
   const updatedProfile = await prisma.userProfile.update({
     where: { user_id: userId },
     data: {
       book_categories,
-      onboarding_step: OnboardingStep.PREFERENCES
+      onboarding_step: OnboardingStep.READING_TIME
     }
   });
 
-  res.json({
+  return res.status(200).json({
+    success: true,
     message: 'Book categories updated successfully',
-    next_step: OnboardingStep.PREFERENCES,
-    profile: updatedProfile
+    data: {
+      currentStep: updatedProfile.onboarding_step,
+      book_categories: updatedProfile.book_categories
+    }
   });
 });
 
 // POST /auth/onboarding/reading-time - Submit daily reading time preference
 export const updateReadingTime = asyncHandler(async (req: Request, res: Response) => {
-  const userId = req.user!.id;
-  const { daily_reading_time, referral_source } = req.body;
+  const userId = req.user?.id;
+  const { daily_reading_time } = req.body;
 
   if (!daily_reading_time || !Object.values(ReadingTime).includes(daily_reading_time)) {
-    res.status(400).json({ error: 'Valid daily reading time is required' });
-    return;
+    return res.status(400).json({
+      success: false,
+      message: 'Valid daily reading time is required'
+    });
   }
 
-  if (!referral_source || !Object.values(ReferralSource).includes(referral_source)) {
-    res.status(400).json({ error: 'Valid referral source is required' });
-    return;
-  }
-
-  const userProfile = await prisma.userProfile.findUnique({
+  const profile = await prisma.userProfile.findUnique({
     where: { user_id: userId }
   });
 
-  if (!userProfile) {
-    res.status(404).json({ error: 'User profile not found' });
-    return;
+  if (!profile) {
+    return res.status(404).json({
+      success: false,
+      message: 'User profile not found'
+    });
   }
 
-  if (!validateStepProgression(userProfile.onboarding_step, OnboardingStep.PREFERENCES)) {
-    res.status(400).json({ 
-      error: 'Invalid step progression',
-      current_step: userProfile.onboarding_step,
-      required_step: OnboardingStep.PREFERENCES
+  if (!validateStepProgression(profile.onboarding_step, OnboardingStep.READING_TIME)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid onboarding step progression'
     });
-    return;
   }
 
   const updatedProfile = await prisma.userProfile.update({
     where: { user_id: userId },
     data: {
       daily_reading_time,
+      onboarding_step: OnboardingStep.VOICE
+    }
+  });
+
+  return res.status(200).json({
+    success: true,
+    message: 'Reading time preference updated successfully',
+    data: {
+      currentStep: updatedProfile.onboarding_step,
+      daily_reading_time: updatedProfile.daily_reading_time
+    }
+  });
+});
+
+// POST /auth/onboarding/voice - Submit voice recording/upload for cloning
+export const updateVoice = asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.user?.id;
+  
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      message: 'User not authenticated'
+    });
+  }
+  
+  const { voice_name, audio_file_url } = req.body;
+
+  if (!voice_name || typeof voice_name !== 'string' || voice_name.trim().length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'Voice name is required'
+    });
+  }
+
+  if (!audio_file_url || typeof audio_file_url !== 'string') {
+    return res.status(400).json({
+      success: false,
+      message: 'Audio file URL is required'
+    });
+  }
+
+  const profile = await prisma.userProfile.findUnique({
+    where: { user_id: userId }
+  });
+
+  if (!profile) {
+    return res.status(404).json({
+      success: false,
+      message: 'User profile not found'
+    });
+  }
+
+  if (!validateStepProgression(profile.onboarding_step, OnboardingStep.VOICE)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid onboarding step progression'
+    });
+  }
+
+  try {
+    // Create voice clone with ElevenLabs Instant Voice Cloning API
+    // Note: audio_file_url should be converted to a readable stream for the API
+    const response = await fetch(audio_file_url);
+    const audioBuffer = await response.arrayBuffer();
+    const audioBlob = new Blob([audioBuffer]);
+    
+    const voiceClone = await elevenlabs.voices.ivc.create({
+      name: voice_name.trim(),
+      files: [audioBlob as File], // Convert to File-like object
+      description: `Voice clone for ${profile.first_name || 'user'}`
+    });
+
+    // Check if any existing voices are set as default
+    const existingDefaultVoice = await prisma.userVoice.findFirst({
+      where: { 
+        user_id: userId,
+        is_default: true 
+      }
+    });
+
+    // Create voice record in database with actual ElevenLabs ID
+    const voice = await prisma.userVoice.create({
+      data: {
+        user_id: userId,
+        voice_name: voice_name.trim(),
+        audio_file_url,
+        elevenlabs_voice_id: voiceClone.voiceId,
+        is_default: !existingDefaultVoice // First voice becomes default
+      }
+    });
+
+    // Update onboarding step
+    await prisma.userProfile.update({
+      where: { user_id: userId },
+      data: {
+        onboarding_step: OnboardingStep.VOICE_DEMO
+      }
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Voice created and cloned successfully with ElevenLabs',
+      data: {
+        currentStep: OnboardingStep.VOICE_DEMO,
+        voice: {
+          id: voice.id,
+          voice_name: voice.voice_name,
+          elevenlabs_voice_id: voice.elevenlabs_voice_id,
+          is_default: voice.is_default
+        }
+      }
+    });
+
+  } catch (elevenLabsError: any) {
+    console.error('ElevenLabs API Error:', elevenLabsError);
+    
+    // If ElevenLabs fails, create a placeholder record and continue
+    const voice = await prisma.userVoice.create({
+      data: {
+        user_id: userId,
+        voice_name: voice_name.trim(),
+        audio_file_url,
+        elevenlabs_voice_id: `placeholder_${Date.now()}`, // Placeholder ID
+        is_default: true
+      }
+    });
+
+    // Update onboarding step even if voice cloning failed
+    await prisma.userProfile.update({
+      where: { user_id: userId },
+      data: {
+        onboarding_step: OnboardingStep.VOICE_DEMO
+      }
+    });
+
+    return res.status(207).json({
+      success: true,
+      message: 'Voice saved but cloning failed. Please try again later.',
+      data: {
+        currentStep: OnboardingStep.VOICE_DEMO,
+        voice: {
+          id: voice.id,
+          voice_name: voice.voice_name,
+          is_default: voice.is_default
+        },
+        warning: 'Voice cloning failed - using placeholder. Contact support if this persists.'
+      }
+    });
+  }
+});
+
+// POST /auth/onboarding/voice-demo - Mark voice demo as completed
+export const completeVoiceDemo = asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.user?.id;
+
+  const profile = await prisma.userProfile.findUnique({
+    where: { user_id: userId }
+  });
+
+  if (!profile) {
+    return res.status(404).json({
+      success: false,
+      message: 'User profile not found'
+    });
+  }
+
+  if (!validateStepProgression(profile.onboarding_step, OnboardingStep.VOICE_DEMO)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid onboarding step progression'
+    });
+  }
+
+  const updatedProfile = await prisma.userProfile.update({
+    where: { user_id: userId },
+    data: {
+      onboarding_step: OnboardingStep.PREMIUM_TRIAL
+    }
+  });
+
+  return res.status(200).json({
+    success: true,
+    message: 'Voice demo completed',
+    data: {
+      currentStep: updatedProfile.onboarding_step
+    }
+  });
+});
+
+// POST /auth/onboarding/premium-trial - Handle premium trial signup
+export const handlePremiumTrial = asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.user?.id;
+  const { trial_started } = req.body; // Optional - frontend can indicate if trial was started
+
+  const profile = await prisma.userProfile.findUnique({
+    where: { user_id: userId }
+  });
+
+  if (!profile) {
+    return res.status(404).json({
+      success: false,
+      message: 'User profile not found'
+    });
+  }
+
+  if (!validateStepProgression(profile.onboarding_step, OnboardingStep.PREMIUM_TRIAL)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid onboarding step progression'
+    });
+  }
+
+  const updatedProfile = await prisma.userProfile.update({
+    where: { user_id: userId },
+    data: {
+      onboarding_step: OnboardingStep.REFERRAL
+    }
+  });
+
+  return res.status(200).json({
+    success: true,
+    message: 'Premium trial step completed',
+    data: {
+      currentStep: updatedProfile.onboarding_step,
+      trial_started: trial_started || false
+    }
+  });
+});
+
+// POST /auth/onboarding/referral-source - Submit referral source and complete onboarding
+export const completeOnboarding = asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.user?.id;
+  const { referral_source } = req.body;
+
+  if (!referral_source || !Object.values(ReferralSource).includes(referral_source)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Valid referral source is required'
+    });
+  }
+
+  const profile = await prisma.userProfile.findUnique({
+    where: { user_id: userId }
+  });
+
+  if (!profile) {
+    return res.status(404).json({
+      success: false,
+      message: 'User profile not found'
+    });
+  }
+
+  if (!validateStepProgression(profile.onboarding_step, OnboardingStep.REFERRAL)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid onboarding step progression'
+    });
+  }
+
+  const updatedProfile = await prisma.userProfile.update({
+    where: { user_id: userId },
+    data: {
       referral_source,
       onboarding_step: OnboardingStep.COMPLETED,
       onboarding_completed: true
     }
   });
 
-  res.json({
+  return res.status(200).json({
+    success: true,
     message: 'Onboarding completed successfully!',
-    completed: true,
-    profile: updatedProfile
+    data: {
+      currentStep: updatedProfile.onboarding_step,
+      completed: updatedProfile.onboarding_completed,
+      referral_source: updatedProfile.referral_source
+    }
   });
-});
-
-// Legacy endpoint for backward compatibility
-export const completeOnboarding = updateReadingTime; 
+}); 

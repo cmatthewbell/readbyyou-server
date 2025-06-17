@@ -14,7 +14,7 @@ export const getIndex = (req: Request, res: Response) => {
       }
     };
 
-    res.status(200).json(response);
+    return res.status(200).json(response);
   } catch (error) {
     console.error('Index route error:', error);
     
@@ -24,6 +24,6 @@ export const getIndex = (req: Request, res: Response) => {
       error: error instanceof Error ? error.message : 'Unknown error'
     };
 
-    res.status(500).json(errorResponse);
+    return res.status(500).json(errorResponse);
   }
 }; 
