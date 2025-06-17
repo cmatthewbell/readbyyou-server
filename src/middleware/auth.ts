@@ -3,7 +3,7 @@ import { supabase } from '../config/supabase';
 import prisma from '../config/database';
 import { ApiResponse } from '../types';
 
-export const authenticateUser = async (req: Request, res: Response, next: NextFunction) => {
+export const authenticateUser = async (req: Request, res: Response, next: NextFunction): Promise<any> => {
   try {
     const authHeader = req.headers.authorization;
     
@@ -68,7 +68,7 @@ export const authenticateUser = async (req: Request, res: Response, next: NextFu
   }
 };
 
-export const requireOnboarding = async (req: Request, res: Response, next: NextFunction) => {
+export const requireOnboarding = async (req: Request, res: Response, next: NextFunction): Promise<any> => {
   try {
     if (!req.user) {
       const errorResponse: ApiResponse = {
