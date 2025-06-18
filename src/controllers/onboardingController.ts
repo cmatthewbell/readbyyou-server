@@ -1,14 +1,9 @@
 import { Request, Response } from 'express';
 import { PrismaClient, OnboardingStep, AgeGroup, ReadingTime, ReferralSource, BookCategory } from '@prisma/client';
 import { asyncHandler } from '../utils/asyncHandler';
-import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
+import { client as elevenlabs } from '../config/elevenlabs';
 
 const prisma = new PrismaClient();
-
-// Initialize ElevenLabs client
-const elevenlabs = new ElevenLabsClient({
-  apiKey: process.env.ELEVENLABS_API_KEY,
-});
 
 // Helper function to validate onboarding step progression
 const validateStepProgression = (currentStep: OnboardingStep, requiredStep: OnboardingStep): boolean => {
