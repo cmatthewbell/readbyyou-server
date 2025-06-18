@@ -333,4 +333,81 @@ ${allText.substring(0, 2000)}...`; // Limit text for API efficiency
       details: error instanceof Error ? error.message : 'Unknown error'
     });
   }
-}); 
+});
+
+/**
+ * Get all books for the authenticated user with cursor pagination
+ * GET /books?cursor=book-id&limit=10
+ */
+export const getUserBooks = asyncHandler(async (req: AuthenticatedRequest, res: Response): Promise<any> => {
+  const userId = req.user.id;
+  const { cursor, limit = '10' } = req.query;
+  
+  // Parse and validate limit
+  const pageSize = Math.min(Math.max(parseInt(limit as string) || 10, 1), 50); // Min 1, Max 50
+  
+  try {
+    // Build where clause for cursor pagination
+    const where: any = {
+      user_id: userId
+    };
+    
+    // If cursor is provided, get books created before this cursor
+    if (cursor && typeof cursor === 'string') {
+      where.created_at = {
+        lt: await getCursorDate(cursor)
+      };
+    }
+    
+    // Fetch books with pagination
+    const books = await prisma.book.findMany({
+      where,
+      orderBy: {
+        created_at: 'desc' // Most recent first
+      },
+      take: pageSize + 1 // Take one extra to determine if there's a next page
+    });
+    
+    // Check if there are more books (hasNextPage)
+    const hasNextPage = books.length > pageSize;
+    const booksToReturn = hasNextPage ? books.slice(0, pageSize) : books;
+    
+    // Get next cursor (created_at of the last book)
+    const nextCursor = hasNextPage && booksToReturn.length > 0 
+      ? booksToReturn[booksToReturn.length - 1].id 
+      : null;
+    
+    return res.status(200).json({
+      success: true,
+      books: booksToReturn,
+      pagination: {
+        hasNextPage,
+        nextCursor,
+        limit: pageSize
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error fetching user books:', error);
+    return res.status(500).json({
+      error: 'Failed to fetch books',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+/**
+ * Helper function to get the created_at date from a cursor (book ID)
+ */
+async function getCursorDate(cursor: string): Promise<Date> {
+  const book = await prisma.book.findUnique({
+    where: { id: cursor },
+    select: { created_at: true }
+  });
+  
+  if (!book) {
+    throw new Error('Invalid cursor provided');
+  }
+  
+  return book.created_at;
+} 
