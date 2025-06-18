@@ -735,3 +735,301 @@ export const updateBookProgress = asyncHandler(async (req: AuthenticatedRequest,
   }
 });
 
+/**
+ * Add pages to an existing book
+ * POST /books/:id/add-pages
+ * FormData: { voiceId: string, images: File[] }
+ */
+export const addPagesToBook = asyncHandler(async (req: AuthenticatedRequest, res: Response): Promise<any> => {
+  const userId = req.user.id;
+  const { id } = req.params;
+  const { voiceId } = req.body;
+  const images = req.files;
+
+  // Validate inputs
+  if (!id) {
+    return res.status(400).json({
+      error: 'Book ID is required'
+    });
+  }
+
+  if (!images || !Array.isArray(images) || images.length === 0) {
+    return res.status(400).json({
+      error: 'At least one image file is required'
+    });
+  }
+
+  if (!voiceId) {
+    return res.status(400).json({
+      error: 'Voice ID is required'
+    });
+  }
+
+  if (images.length > 10) {
+    return res.status(400).json({
+      error: 'Maximum 10 images allowed per addition'
+    });
+  }
+
+  console.log(`Adding ${images.length} pages to book ${id} for user ${userId}`);
+
+  try {
+    // Get existing book and validate
+    const existingBook = await prisma.book.findFirst({
+      where: {
+        id: id,
+        user_id: userId
+      }
+    });
+
+    if (!existingBook) {
+      return res.status(404).json({
+        error: 'Book not found'
+      });
+    }
+
+    if (existingBook.status !== 'completed') {
+      return res.status(400).json({
+        error: 'Can only add pages to completed books'
+      });
+    }
+
+    // PHASE 0: Upload new images to Supabase Storage
+    console.log('PHASE 0: Uploading new images to storage...');
+    const imageFiles = images.map((file: any) => ({
+      buffer: file.buffer,
+      originalName: file.originalname
+    }));
+
+    const uploadResults = await uploadMultipleImages(imageFiles, userId);
+    
+    // Check for upload failures
+    const failedUploads = uploadResults.filter(result => !result.success);
+    if (failedUploads.length > 0) {
+      console.error('Some image uploads failed:', failedUploads);
+      return res.status(500).json({
+        error: 'Failed to upload some images',
+        details: failedUploads.map(f => f.error)
+      });
+    }
+
+    const newImageUrls = uploadResults.map(result => result.publicUrl!);
+    console.log(`Uploaded ${newImageUrls.length} new images successfully`);
+
+    // PHASE 1: Extract text from new images using OCR
+    console.log('PHASE 1: Starting OCR processing for new images');
+    
+    // Create payload array for new OCR tasks
+    const ocrPayloads = newImageUrls.map((imageUrl: string, index: number) => ({
+      payload: {
+        imageUrl,
+        pageNumber: existingBook.page_count + index + 1, // Continue from existing page count
+        totalPages: existingBook.page_count + newImageUrls.length
+      }
+    }));
+
+    console.log(`Processing ${ocrPayloads.length} new images for OCR`);
+
+    let sortedOCRResults: any[] = [];
+    
+    try {
+      // Execute all OCR tasks at once
+      const ocrBatchResult = await extractTextFromImage.batchTriggerAndWait(ocrPayloads);
+      console.log(`OCR batch completed`);
+
+      // Process OCR results
+      if (ocrBatchResult.runs) {
+        console.log(`Received ${ocrBatchResult.runs.length} OCR runs`);
+        
+        const ocrResults: any[] = [];
+        
+        for (let index = 0; index < ocrBatchResult.runs.length; index++) {
+          const run = ocrBatchResult.runs[index];
+          if (run.ok && run.output?.success) {
+            console.log(`✅ OCR ${index + 1} completed successfully`);
+            ocrResults[index] = {
+              pageNumber: existingBook.page_count + index + 1,
+              text: run.output.text || '',
+              confidence: run.output.confidence || 'low'
+            };
+          } else {
+            const errorMsg = 'error' in run ? run.error : 'Unknown OCR error';
+            console.error(`❌ Failed to process OCR ${index + 1}:`, errorMsg);
+            return res.status(500).json({
+              error: `Failed to extract text from image ${index + 1}`,
+              details: errorMsg
+            });
+          }
+        }
+
+        // Sort by page number
+        sortedOCRResults = ocrResults
+          .filter(result => result !== undefined)
+          .sort((a, b) => a.pageNumber - b.pageNumber);
+
+      } else {
+        console.error(`OCR batch result does not contain runs property:`, ocrBatchResult);
+        return res.status(500).json({
+          error: 'OCR batch processing failed'
+        });
+      }
+    } catch (error) {
+      console.error(`Error processing OCR batch:`, error);
+      return res.status(500).json({
+        error: 'Failed to process OCR batch',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+
+    console.log(`OCR processing complete. Total new pages: ${sortedOCRResults.length}/${newImageUrls.length}`);
+
+    if (sortedOCRResults.length === 0) {
+      return res.status(500).json({
+        error: 'No text was successfully extracted from any new images'
+      });
+    }
+
+    // PHASE 2: Convert new text to speech
+    console.log('PHASE 2: Starting text-to-speech conversion for new pages');
+    
+    // Create payload array for TTS tasks (starting from existing chunk count)
+    const ttsPayloads = sortedOCRResults.map((page, index) => ({
+      payload: {
+        text: page.text,
+        voiceId,
+        userId,
+        bookId: id,
+        chunkIndex: existingBook.page_count + index // Continue chunk indexing
+      }
+    }));
+
+    console.log(`Converting ${ttsPayloads.length} new text chunks to speech`);
+
+    let newChunkUrls: any[] = [];
+
+    try {
+      // Execute all TTS tasks at once
+      const ttsBatchResult = await textToSpeech.batchTriggerAndWait(ttsPayloads);
+      console.log(`TTS batch completed`);
+
+      // Process TTS results
+      if (ttsBatchResult.runs) {
+        console.log(`Received ${ttsBatchResult.runs.length} TTS runs`);
+        
+        const ttsResults: any[] = [];
+        
+        for (let index = 0; index < ttsBatchResult.runs.length; index++) {
+          const run = ttsBatchResult.runs[index];
+          if (run.ok && run.output?.success) {
+            console.log(`✅ TTS ${index + 1} completed successfully`);
+            ttsResults[index] = {
+              chunkIndex: run.output.chunkIndex,
+              audioUrl: run.output.audioUrl,
+              duration: run.output.duration || 0
+            };
+          } else {
+            const errorMsg = 'error' in run ? run.error : 'Unknown TTS error';
+            console.error(`❌ Failed to process TTS ${index + 1}:`, errorMsg);
+            return res.status(500).json({
+              error: `Failed to convert text to speech for chunk ${index + 1}`,
+              details: errorMsg
+            });
+          }
+        }
+
+        // Filter out undefined results and sort by chunk index
+        newChunkUrls = ttsResults
+          .filter(result => result !== undefined)
+          .sort((a, b) => a.chunkIndex - b.chunkIndex);
+
+      } else {
+        console.error(`TTS batch result does not contain runs property:`, ttsBatchResult);
+        return res.status(500).json({
+          error: 'TTS batch processing failed'
+        });
+      }
+    } catch (error) {
+      console.error(`Error processing TTS batch:`, error);
+      return res.status(500).json({
+        error: 'Failed to process TTS batch',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+
+    console.log(`TTS processing complete. Total new audio chunks: ${newChunkUrls.length}/${sortedOCRResults.length}`);
+
+    if (newChunkUrls.length === 0) {
+      return res.status(500).json({
+        error: 'No audio was successfully generated from any new text'
+      });
+    }
+
+    // PHASE 3: Append new audio chunks to existing book
+    console.log('PHASE 3: Appending new audio chunks to existing book');
+
+    const combineResult = await tasks.triggerAndWait<typeof combineBookAudio>(
+      'combine-book-audio',
+      {
+        userId,
+        bookId: id,
+        totalChunks: newChunkUrls.length,
+        chunkUrls: newChunkUrls,
+        isAppending: true, // Flag to indicate this is an append operation
+        existingAudioUrl: existingBook.audio_url
+      }
+    );
+    
+    if (!combineResult.ok) {
+      console.error('Audio combination failed:', combineResult.error);
+      return res.status(500).json({
+        error: 'Failed to append new audio to existing book',
+        details: combineResult.error
+      });
+    }
+    
+    console.log('Audio append operation successful!');
+    
+    const finalAudioUrl = combineResult.output?.finalAudioUrl;
+    if (!finalAudioUrl) {
+      console.error('Final audio URL is missing or invalid', combineResult.output);
+      return res.status(500).json({
+        error: 'Final audio URL is missing or invalid'
+      });
+    }
+
+    // PHASE 4: Update book record in database
+    console.log('Updating book record in database...');
+    const updatedBook = await prisma.book.update({
+      where: {
+        id: id
+      },
+      data: {
+        audio_url: finalAudioUrl,
+        total_duration: combineResult.output.totalDuration || existingBook.total_duration,
+        page_count: existingBook.page_count + newImageUrls.length,
+        updated_at: new Date()
+      }
+    });
+
+    console.log(`Book updated successfully: ${updatedBook.id}`);
+    console.log(`Added ${newImageUrls.length} pages. Total pages: ${updatedBook.page_count}`);
+
+    return res.status(200).json({
+      success: true,
+      message: `Successfully added ${newImageUrls.length} pages to book`,
+      book: updatedBook,
+      addedPages: newImageUrls.length,
+      newTotalPages: updatedBook.page_count,
+      newTotalDuration: updatedBook.total_duration
+    });
+
+  } catch (error) {
+    console.error('Error adding pages to book:', error);
+    
+    return res.status(500).json({
+      error: 'Failed to add pages to book',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+

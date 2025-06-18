@@ -16,6 +16,8 @@ interface Payload {
     audioUrl: string;
     duration: number;
   }>;
+  isAppending?: boolean; // Optional flag for append operations
+  existingAudioUrl?: string; // URL of existing audio to append to
 }
 
 interface CombineResult {
@@ -64,9 +66,33 @@ export const combineBookAudio = task({
       // Sort chunks by index to ensure correct order
       const sortedChunks = payload.chunkUrls.sort((a, b) => a.chunkIndex - b.chunkIndex);
 
-      // Download all chunks
-      const chunkFiles: string[] = [];
+      // Handle existing audio if this is an append operation
+      const allAudioFiles: string[] = [];
       let totalDuration = 0;
+
+      if (payload.isAppending && payload.existingAudioUrl) {
+        console.log('Downloading existing audio for append operation...');
+        try {
+          const response = await fetch(payload.existingAudioUrl);
+          if (!response.ok) {
+            throw new Error(`Failed to download existing audio: ${response.statusText}`);
+          }
+
+          const existingAudioBuffer = Buffer.from(await response.arrayBuffer());
+          const existingAudioPath = path.join(tempDir, 'existing-audio.mp3');
+          
+          await writeFile(existingAudioPath, existingAudioBuffer);
+          allAudioFiles.push(existingAudioPath);
+
+          console.log(`Downloaded existing audio: ${existingAudioBuffer.length} bytes`);
+        } catch (error) {
+          console.error('Error downloading existing audio:', error);
+          throw new Error(`Failed to download existing audio: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+      }
+
+      // Download all new chunks
+      const chunkFiles: string[] = [];
 
       for (const chunk of sortedChunks) {
         console.log(`Downloading chunk ${chunk.chunkIndex} from ${chunk.audioUrl}`);
@@ -92,18 +118,22 @@ export const combineBookAudio = task({
         }
       }
 
-      console.log(`Downloaded ${chunkFiles.length} chunks, total estimated duration: ${totalDuration}s`);
+      // Combine all audio files (existing + new chunks)
+      allAudioFiles.push(...chunkFiles);
+      
+      console.log(`Downloaded ${chunkFiles.length} new chunks, total estimated new duration: ${totalDuration}s`);
+      console.log(`Total files to combine: ${allAudioFiles.length}`);
 
       // Combine audio files using fluent-ffmpeg
       const outputPath = path.join(tempDir, 'combined-book.mp3');
       
-      console.log('Combining audio chunks with fluent-ffmpeg...');
+      console.log('Combining audio files with fluent-ffmpeg...');
       
       await new Promise<void>((resolve, reject) => {
         let command = ffmpeg();
         
-        // Add all chunk files as inputs
-        chunkFiles.forEach(file => {
+        // Add all audio files as inputs (existing first, then new chunks)
+        allAudioFiles.forEach(file => {
           command = command.input(file);
         });
         
@@ -111,7 +141,7 @@ export const combineBookAudio = task({
         command
           .outputOptions([
             '-filter_complex', 
-            `concat=n=${chunkFiles.length}:v=0:a=1[out]`,
+            `concat=n=${allAudioFiles.length}:v=0:a=1[out]`,
             '-map', '[out]'
           ])
           .audioCodec('mp3')
@@ -164,8 +194,8 @@ export const combineBookAudio = task({
 
       console.log(`Successfully combined and uploaded book audio: ${uploadResult.publicUrl}`);
 
-      // Clean up individual chunk files from Supabase Storage
-      console.log('Cleaning up individual audio chunks from storage...');
+      // Clean up individual chunk files from Supabase Storage (only new chunks, not existing audio)
+      console.log('Cleaning up new audio chunks from storage...');
       
       const chunkPaths = sortedChunks.map(chunk => {
         // Extract the file path from the chunk URL
@@ -175,7 +205,7 @@ export const combineBookAudio = task({
         return `${payload.userId}/${payload.bookId}/${fileName}`;
       });
 
-      // Delete chunks in parallel
+      // Delete new chunks in parallel (don't delete existing audio)
       const deletePromises = chunkPaths.map(async (chunkPath) => {
         try {
           const { error } = await supabase.storage
@@ -193,6 +223,31 @@ export const combineBookAudio = task({
       });
 
       await Promise.allSettled(deletePromises);
+      
+      // Also delete the old complete book file if this is an append operation
+      if (payload.isAppending && payload.existingAudioUrl) {
+        try {
+          const urlParts = payload.existingAudioUrl.split('/');
+          const bucketIndex = urlParts.findIndex(part => part === 'book-audio');
+          if (bucketIndex !== -1) {
+            const pathParts = urlParts.slice(bucketIndex + 1);
+            const oldAudioPath = pathParts.join('/');
+            
+            const { error } = await supabase.storage
+              .from('book-audio')
+              .remove([oldAudioPath]);
+            
+            if (error) {
+              console.warn(`Failed to delete old audio file ${oldAudioPath}:`, error.message);
+            } else {
+              console.log(`Deleted old audio file: ${oldAudioPath}`);
+            }
+          }
+        } catch (error) {
+          console.warn('Error deleting old audio file:', error);
+        }
+      }
+      
       console.log('Chunk cleanup completed');
 
       return {
