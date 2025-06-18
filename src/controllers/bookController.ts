@@ -410,4 +410,46 @@ async function getCursorDate(cursor: string): Promise<Date> {
   }
   
   return book.created_at;
-} 
+}
+
+/**
+ * Get a single book by ID for the authenticated user
+ * GET /books/:id
+ */
+export const getBook = asyncHandler(async (req: AuthenticatedRequest, res: Response): Promise<any> => {
+  const userId = req.user.id;
+  const { id } = req.params;
+  
+  if (!id) {
+    return res.status(400).json({
+      error: 'Book ID is required'
+    });
+  }
+  
+  try {
+    const book = await prisma.book.findFirst({
+      where: {
+        id: id,
+        user_id: userId // Ensure user can only access their own books
+      }
+    });
+    
+    if (!book) {
+      return res.status(404).json({
+        error: 'Book not found'
+      });
+    }
+    
+    return res.status(200).json({
+      success: true,
+      book
+    });
+    
+  } catch (error) {
+    console.error('Error fetching book:', error);
+    return res.status(500).json({
+      error: 'Failed to fetch book',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+}); 
