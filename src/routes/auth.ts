@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getAuthUrl, handleAuthCallback, getUserInfo, logout } from '../controllers/authController';
+import { getAuthUrl, handleAuthCallback, getUserInfo, logout, getAuthStatus } from '../controllers/authController';
 import { 
   getOnboardingStatus,
   updateAgeGroup,
@@ -12,7 +12,7 @@ import {
   handlePremiumTrial,
   completeOnboarding 
 } from '../controllers/onboardingController';
-import { authenticateUser } from '../middleware/auth';
+import { authenticateUser, optionalAuth } from '../middleware/auth';
 
 const router = Router();
 
@@ -24,6 +24,9 @@ router.get('/callback', handleAuthCallback);
 
 // GET /auth/me - Get current user info (requires authentication)
 router.get('/me', authenticateUser, getUserInfo);
+
+// GET /auth/status - Get auth status for routing decisions (optional auth)
+router.get('/status', optionalAuth, getAuthStatus);
 
 // POST /auth/logout - Logout user (requires authentication)
 router.post('/logout', authenticateUser, logout);

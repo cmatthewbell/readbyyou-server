@@ -91,6 +91,8 @@ export interface AuthResponse {
   user: RequestUser;
   token: string;
   onboarding_required: boolean;
+  is_new_user: boolean;
+  current_onboarding_step: OnboardingStep;
 }
 
 // Extend Express Request type to include user

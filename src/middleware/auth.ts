@@ -68,6 +68,52 @@ export const authenticateUser = async (req: Request, res: Response, next: NextFu
   }
 };
 
+// Optional authentication - doesn't return error if no token
+export const optionalAuth = async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+  try {
+    const authHeader = req.headers.authorization;
+    
+    // If no auth header, continue without user
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return next();
+    }
+
+    const token = authHeader.substring(7); // Remove 'Bearer ' prefix
+
+    // Verify the token with Supabase
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+
+    if (error || !user) {
+      // Continue without user if token is invalid
+      return next();
+    }
+
+    // Get user from database
+    const dbUser = await prisma.user.findUnique({
+      where: { email: user.email! },
+      include: {
+        profile: true
+      }
+    });
+
+    if (dbUser) {
+      // Attach user to request if found
+      req.user = {
+        id: dbUser.id,
+        email: dbUser.email,
+        provider: dbUser.provider,
+        provider_id: dbUser.provider_id
+      };
+    }
+
+    return next();
+  } catch (error) {
+    // Continue without user if any error occurs
+    console.error('Optional auth error:', error);
+    return next();
+  }
+};
+
 export const requireOnboarding = async (req: Request, res: Response, next: NextFunction): Promise<any> => {
   try {
     if (!req.user) {

@@ -98,16 +98,27 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
     const { user, session } = data;
 
     // Check if user exists in our database
-    let dbUser = await prisma.user.findUnique({
-      where: { email: user.email! }
+    let existingUser = await prisma.user.findUnique({
+      where: { email: user.email! },
+      include: {
+        profile: true
+      }
     });
 
+    let isNewUser = false;
+    let userId: string;
+    let userEmail: string;
+    let userProvider: string;
+    let userProviderId: string;
+    let userProfile;
+
     // Create user if doesn't exist
-    if (!dbUser) {
+    if (!existingUser) {
       const provider = user.app_metadata.provider || 'unknown';
       const providerId = user.user_metadata.provider_id || user.id;
 
-      dbUser = await prisma.user.create({
+      // Create user
+      const newUser = await prisma.user.create({
         data: {
           email: user.email!,
           provider_id: providerId,
@@ -116,24 +127,55 @@ export const handleAuthCallback = async (req: Request, res: Response) => {
       });
 
       // Create empty profile for new user
-      await prisma.userProfile.create({
+      userProfile = await prisma.userProfile.create({
         data: {
-          user_id: dbUser.id,
+          user_id: newUser.id,
           onboarding_step: 'AGE',
           onboarding_completed: false
         }
       });
+
+      // Set user data
+      userId = newUser.id;
+      userEmail = newUser.email;
+      userProvider = newUser.provider;
+      userProviderId = newUser.provider_id;
+      isNewUser = true;
+    } else {
+      userProfile = existingUser.profile;
+      
+      // If user exists but has no profile, create one (edge case)
+      if (!userProfile) {
+        userProfile = await prisma.userProfile.create({
+          data: {
+            user_id: existingUser.id,
+            onboarding_step: 'AGE',
+            onboarding_completed: false
+          }
+        });
+      }
+
+      // Set user data from existing user
+      userId = existingUser.id;
+      userEmail = existingUser.email;
+      userProvider = existingUser.provider;
+      userProviderId = existingUser.provider_id;
     }
+
+    // At this point, all variables are guaranteed to exist
+    const onboardingRequired = !userProfile.onboarding_completed;
 
     const authResponse: AuthResponse = {
       user: {
-        id: dbUser.id,
-        email: dbUser.email,
-        provider: dbUser.provider,
-        provider_id: dbUser.provider_id
+        id: userId,
+        email: userEmail,
+        provider: userProvider,
+        provider_id: userProviderId
       },
       token: session.access_token,
-      onboarding_required: true // Will check this properly later
+      onboarding_required: onboardingRequired,
+      is_new_user: isNewUser,
+      current_onboarding_step: userProfile.onboarding_step
     };
 
     const response: ApiResponse<AuthResponse> = {
@@ -237,6 +279,46 @@ export const logout = async (req: Request, res: Response) => {
     const errorResponse: ApiResponse = {
       success: false,
       message: 'Logout failed',
+      error: error instanceof Error ? error.message : 'Unknown error'
+    };
+    return res.status(500).json(errorResponse);
+  }
+};
+
+// GET /auth/status - Quick status check for routing decisions
+export const getAuthStatus = async (req: Request, res: Response) => {
+  try {
+    if (!req.user) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          authenticated: false,
+          onboarding_required: true
+        }
+      });
+    }
+
+    // Get user profile
+    const profile = await prisma.userProfile.findUnique({
+      where: { user_id: req.user.id }
+    });
+
+    const response: ApiResponse = {
+      success: true,
+      message: 'Auth status retrieved successfully',
+      data: {
+        authenticated: true,
+        onboarding_required: !profile?.onboarding_completed,
+        current_onboarding_step: profile?.onboarding_step || 'AGE'
+      }
+    };
+
+    return res.status(200).json(response);
+  } catch (error) {
+    console.error('Auth status error:', error);
+    const errorResponse: ApiResponse = {
+      success: false,
+      message: 'Failed to get auth status',
       error: error instanceof Error ? error.message : 'Unknown error'
     };
     return res.status(500).json(errorResponse);
