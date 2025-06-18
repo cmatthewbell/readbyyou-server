@@ -82,6 +82,7 @@ model User {
   // Relations
   profile UserProfile?
   voices  UserVoice[]
+  books   Book[]
 
   @@map("users")
 }
@@ -124,4 +125,27 @@ model UserVoice {
   updated_at DateTime @updatedAt
 
   @@map("user_voices")
+}
+
+model Book {
+  id      String @id @default(uuid())
+  user_id String
+  user    User   @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  // Book details
+  title          String
+  audio_url      String
+  total_duration Int // Duration in seconds
+  page_count     Int
+  image_urls     String[] // Array of image URLs
+
+  // Progress tracking
+  progress Int @default(0) // Current position in seconds
+
+  // Status and metadata
+  status     String   @default("completed") // completed, processing, failed
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@map("books")
 }
