@@ -279,7 +279,7 @@ export const updateReadingTime = asyncHandler(async (req: AuthenticatedRequest, 
   });
 });
 
-// POST /auth/onboarding/voice - Submit voice recording/upload for cloning
+// POST /auth/onboarding/voice - Submit single audio file (10-second recording from iPhone or uploaded MP3) for voice cloning
 export const updateVoice = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
   const userId = req.user?.id;
   

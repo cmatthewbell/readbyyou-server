@@ -44,7 +44,7 @@ router.post('/onboarding/book-categories', authenticateUser, updateBookCategorie
 // POST /auth/onboarding/reading-time - Submit daily reading time preference
 router.post('/onboarding/reading-time', authenticateUser, updateReadingTime);
 
-// POST /auth/onboarding/voice - Submit voice recording/upload for cloning
+// POST /auth/onboarding/voice - Submit single audio file (10-second recording from iPhone or uploaded MP3) for voice cloning
 router.post('/onboarding/voice', authenticateUser, updateVoice);
 
 // POST /auth/onboarding/voice-demo/generate - Generate voice demo audio

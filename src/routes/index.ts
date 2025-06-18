@@ -4,6 +4,7 @@ import healthRoutes from './health';
 import authRoutes from './auth';
 import webhookRoutes from './webhooks';
 import bookRoutes from './books';
+import voiceRoutes from './voices';
 
 const router = Router();
 
@@ -18,6 +19,9 @@ router.use('/auth', authRoutes);
 
 // Book routes (requires authentication)
 router.use('/books', bookRoutes);
+
+// Voice routes (requires authentication)
+router.use('/voices', voiceRoutes);
 
 // Webhook routes (no auth required)
 router.use('/webhooks', webhookRoutes);
