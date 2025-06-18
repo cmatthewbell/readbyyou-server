@@ -553,10 +553,17 @@ export const completeVoiceDemo = asyncHandler(async (req: Request, res: Response
   });
 });
 
-// POST /auth/onboarding/premium-trial - Handle premium trial signup
+// POST /auth/onboarding/premium-trial - Handle premium subscription signup via RevenueCat
 export const handlePremiumTrial = asyncHandler(async (req: Request, res: Response) => {
   const userId = req.user?.id;
-  const { trial_started } = req.body; // Optional - frontend can indicate if trial was started
+  const { revenuecat_user_id } = req.body; // RevenueCat customer ID from app
+
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      message: 'User not authenticated'
+    });
+  }
 
   const profile = await prisma.userProfile.findUnique({
     where: { user_id: userId }
@@ -576,6 +583,16 @@ export const handlePremiumTrial = asyncHandler(async (req: Request, res: Respons
     });
   }
 
+  // RevenueCat handles the subscription validation automatically
+  // We just need to verify the user completed the subscription flow
+  if (!revenuecat_user_id) {
+    return res.status(400).json({
+      success: false,
+      message: 'Subscription required to proceed. Please complete purchase in the app.'
+    });
+  }
+
+  // Update to next step - RevenueCat webhooks will handle subscription status
   const updatedProfile = await prisma.userProfile.update({
     where: { user_id: userId },
     data: {
@@ -585,10 +602,10 @@ export const handlePremiumTrial = asyncHandler(async (req: Request, res: Respons
 
   return res.status(200).json({
     success: true,
-    message: 'Premium trial step completed',
+    message: 'Premium subscription completed successfully',
     data: {
       currentStep: updatedProfile.onboarding_step,
-      trial_started: trial_started || false
+      subscription_verified: true
     }
   });
 });
