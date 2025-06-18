@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { createBook, getUserBooks, getBook, deleteBook, streamBookAudio, updateBookProgress, addPagesToBook } from '../controllers/bookController';
+import { createBook, getUserBooks, getBook, deleteBook, streamBookAudio, updateBookProgress, addPagesToBook, changeBookVoice } from '../controllers/bookController';
 import { authenticateUser } from '../middleware/auth';
 
 const router = Router();
@@ -18,6 +18,9 @@ router.patch('/:id/progress', authenticateUser, updateBookProgress);
 
 // POST /books/:id/add-pages - Add pages to an existing book
 router.post('/:id/add-pages', authenticateUser, addPagesToBook);
+
+// POST /books/:id/change-voice - Change the voice of an existing book
+router.post('/:id/change-voice', authenticateUser, changeBookVoice);
 
 // DELETE /books/:id - Delete a book and all its associated storage
 router.delete('/:id', authenticateUser, deleteBook);

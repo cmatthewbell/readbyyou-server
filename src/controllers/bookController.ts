@@ -25,6 +25,53 @@ interface AuthenticatedRequest extends Request {
   files?: any[];
 }
 
+interface VoiceVersion {
+  voiceId: string;
+  audioUrl: string;
+  totalDuration: number;
+}
+
+// Helper functions for voice versions
+function getCurrentVoiceVersion(book: any): VoiceVersion | null {
+  if (!book.current_voice_id || !Array.isArray(book.voice_versions)) return null;
+  
+  return book.voice_versions.find((v: VoiceVersion) => v.voiceId === book.current_voice_id) || null;
+}
+
+function getCurrentAudioUrl(book: any): string | null {
+  const currentVersion = getCurrentVoiceVersion(book);
+  return currentVersion?.audioUrl || null;
+}
+
+function getCurrentTotalDuration(book: any): number {
+  const currentVersion = getCurrentVoiceVersion(book);
+  return currentVersion?.totalDuration || 0;
+}
+
+function getCurrentProgress(book: any): number {
+  if (!book.current_voice_id || typeof book.voice_progress !== 'object') return 0;
+  return book.voice_progress[book.current_voice_id] || 0;
+}
+
+// Helper function to transform book for API response
+function transformBookForResponse(book: any): any {
+  const currentVoiceVersion = getCurrentVoiceVersion(book);
+  const currentProgress = getCurrentProgress(book);
+  
+  return {
+    ...book,
+    // Add convenience fields for frontend
+    current_audio_url: currentVoiceVersion?.audioUrl || null,
+    current_total_duration: currentVoiceVersion?.totalDuration || 0,
+    current_progress: currentProgress,
+    total_voice_versions: Array.isArray(book.voice_versions) ? book.voice_versions.length : 0,
+    // Calculate progress percentage
+    progress_percentage: currentVoiceVersion && currentVoiceVersion.totalDuration > 0 
+      ? Math.round((currentProgress / currentVoiceVersion.totalDuration) * 100 * 10) / 10 
+      : 0
+  };
+}
+
 /**
  * Create a new book from uploaded images
  * POST /books/create
@@ -310,20 +357,31 @@ ${allText.substring(0, 2000)}...`; // Limit text for API efficiency
         id: bookId,
         user_id: userId,
         title: bookTitle,
-        audio_url: finalAudioUrl,
-        total_duration: combineResult.output.totalDuration || 0,
         page_count: imageUrls.length,
         image_urls: [], // Images are deleted after OCR processing
+        text_content: sortedOCRResults.map(page => page.text), // Store extracted text
+        voice_versions: [
+          {
+            voiceId: voiceId,
+            audioUrl: finalAudioUrl,
+            totalDuration: combineResult.output.totalDuration || 0
+          }
+        ],
+        current_voice_id: voiceId,
+        voice_progress: {}, // Empty progress initially
         status: 'completed'
       }
     });
 
     console.log(`Book created successfully: ${book.id}`);
 
-    // Return the actual database book object
+    // Transform book for response with current voice info
+    const transformedBook = transformBookForResponse(book);
+
+    // Return the transformed book object
     return res.status(201).json({
       success: true,
-      book,
+      book: transformedBook,
     });
 
   } catch (error) {
@@ -373,6 +431,9 @@ export const getUserBooks = asyncHandler(async (req: AuthenticatedRequest, res: 
     const hasNextPage = books.length > pageSize;
     const booksToReturn = hasNextPage ? books.slice(0, pageSize) : books;
     
+    // Transform books for response with current voice info
+    const transformedBooks = booksToReturn.map(transformBookForResponse);
+    
     // Get next cursor (created_at of the last book)
     const nextCursor = hasNextPage && booksToReturn.length > 0 
       ? booksToReturn[booksToReturn.length - 1].id 
@@ -380,7 +441,7 @@ export const getUserBooks = asyncHandler(async (req: AuthenticatedRequest, res: 
     
     return res.status(200).json({
       success: true,
-      books: booksToReturn,
+      books: transformedBooks,
       pagination: {
         hasNextPage,
         nextCursor,
@@ -441,9 +502,12 @@ export const getBook = asyncHandler(async (req: AuthenticatedRequest, res: Respo
       });
     }
     
+    // Transform book for response with current voice info
+    const transformedBook = transformBookForResponse(book);
+    
     return res.status(200).json({
       success: true,
-      book
+      book: transformedBook
     });
     
   } catch (error) {
@@ -489,20 +553,23 @@ export const deleteBook = asyncHandler(async (req: AuthenticatedRequest, res: Re
     // Delete audio files from Supabase Storage (images are deleted during OCR processing)
     let deletedFiles = 0;
     
-    if (book.audio_url) {
-      const audioPath = extractStoragePathFromUrl(book.audio_url, userId, id);
-      if (audioPath) {
-        console.log(`Deleting audio file: ${audioPath}`);
-        
-        const { error: audioError } = await supabase.storage
-          .from('book-audio')
-          .remove([audioPath]);
-        
-        if (audioError) {
-          console.warn('Failed to delete audio file:', audioError);
-        } else {
-          console.log(`Deleted audio file: ${audioPath}`);
-          deletedFiles = 1;
+    // Delete all voice versions
+    if (Array.isArray(book.voice_versions)) {
+      for (const voiceVersion of book.voice_versions as unknown as VoiceVersion[]) {
+        const audioPath = extractStoragePathFromUrl(voiceVersion.audioUrl, userId, id);
+        if (audioPath) {
+          console.log(`Deleting audio file: ${audioPath}`);
+          
+          const { error: audioError } = await supabase.storage
+            .from('book-audio')
+            .remove([audioPath]);
+          
+          if (audioError) {
+            console.warn('Failed to delete audio file:', audioError);
+          } else {
+            console.log(`Deleted audio file: ${audioPath}`);
+            deletedFiles++;
+          }
         }
       }
     }
@@ -581,14 +648,15 @@ export const streamBookAudio = asyncHandler(async (req: AuthenticatedRequest, re
       });
     }
     
-    if (!book.audio_url) {
+    const currentAudioUrl = getCurrentAudioUrl(book);
+    if (!currentAudioUrl) {
       return res.status(404).json({
         error: 'Audio file not found for this book'
       });
     }
     
     // Get the audio file from Supabase Storage
-    const audioPath = extractStoragePathFromUrl(book.audio_url, userId, id);
+    const audioPath = extractStoragePathFromUrl(currentAudioUrl, userId, id);
     if (!audioPath) {
       return res.status(500).json({
         error: 'Invalid audio file path'
@@ -693,37 +761,49 @@ export const updateBookProgress = asyncHandler(async (req: AuthenticatedRequest,
       });
     }
     
+    const currentTotalDuration = getCurrentTotalDuration(existingBook);
+    
     // Validate currentTime doesn't exceed total duration (with small buffer for rounding)
-    if (currentTime > existingBook.total_duration + 5) {
+    if (currentTime > currentTotalDuration + 5) {
       return res.status(400).json({
-        error: `Current time cannot exceed total duration (${existingBook.total_duration} seconds)`
+        error: `Current time cannot exceed total duration (${currentTotalDuration} seconds)`
       });
     }
     
     // Calculate percentage progress
-    const progressPercentage = existingBook.total_duration > 0 
-      ? Math.min((currentTime / existingBook.total_duration) * 100, 100)
+    const progressPercentage = currentTotalDuration > 0 
+      ? Math.min((currentTime / currentTotalDuration) * 100, 100)
       : 0;
     
-    // Update progress
+    // Update voice-specific progress
+    const currentVoiceProgress = (existingBook.voice_progress as any) || {};
+    const currentVoiceId = existingBook.current_voice_id;
+    
+    if (currentVoiceId) {
+      currentVoiceProgress[currentVoiceId] = Math.round(currentTime);
+    }
+    
     const updatedBook = await prisma.book.update({
       where: {
         id: id
       },
       data: {
-        progress: Math.round(currentTime),
+        voice_progress: currentVoiceProgress,
         updated_at: new Date()
       }
     });
     
-    console.log(`Updated progress for book ${id}: ${currentTime}s / ${existingBook.total_duration}s (${progressPercentage.toFixed(1)}%)`);
+    console.log(`Updated progress for book ${id}: ${currentTime}s / ${currentTotalDuration}s (${progressPercentage.toFixed(1)}%)`);
+    
+    // Transform book for response with current voice info
+    const transformedBook = transformBookForResponse(updatedBook);
     
     return res.status(200).json({
       success: true,
-      book: updatedBook,
+      book: transformedBook,
       progressPercentage: Math.round(progressPercentage * 10) / 10, // Round to 1 decimal place
       currentTime: Math.round(currentTime),
-      totalDuration: existingBook.total_duration
+      totalDuration: currentTotalDuration
     });
     
   } catch (error) {
@@ -975,7 +1055,7 @@ export const addPagesToBook = asyncHandler(async (req: AuthenticatedRequest, res
         totalChunks: newChunkUrls.length,
         chunkUrls: newChunkUrls,
         isAppending: true, // Flag to indicate this is an append operation
-        existingAudioUrl: existingBook.audio_url
+        existingAudioUrl: getCurrentAudioUrl(existingBook) || undefined
       }
     );
     
@@ -997,15 +1077,35 @@ export const addPagesToBook = asyncHandler(async (req: AuthenticatedRequest, res
       });
     }
 
-    // PHASE 4: Update book record in database
+    // PHASE 4: Update book record with updated voice version
     console.log('Updating book record in database...');
+    
+    // Update the current voice version with new audio and duration
+    const voiceVersions = existingBook.voice_versions as unknown as VoiceVersion[];
+    const currentVoiceId = existingBook.current_voice_id;
+    
+    const updatedVoiceVersions = voiceVersions.map(version => {
+      if (version.voiceId === currentVoiceId) {
+        return {
+          ...version,
+          audioUrl: finalAudioUrl,
+          totalDuration: combineResult.output.totalDuration || version.totalDuration
+        };
+      }
+      return version;
+    });
+    
+    // Update text content with new pages
+    const existingTextContent = existingBook.text_content as string[];
+    const newTextContent = [...existingTextContent, ...sortedOCRResults.map(page => page.text)];
+    
     const updatedBook = await prisma.book.update({
       where: {
         id: id
       },
       data: {
-        audio_url: finalAudioUrl,
-        total_duration: combineResult.output.totalDuration || existingBook.total_duration,
+        voice_versions: updatedVoiceVersions as any,
+        text_content: newTextContent,
         page_count: existingBook.page_count + newImageUrls.length,
         updated_at: new Date()
       }
@@ -1014,13 +1114,16 @@ export const addPagesToBook = asyncHandler(async (req: AuthenticatedRequest, res
     console.log(`Book updated successfully: ${updatedBook.id}`);
     console.log(`Added ${newImageUrls.length} pages. Total pages: ${updatedBook.page_count}`);
 
+    const newTotalDuration = getCurrentTotalDuration(updatedBook);
+    const transformedBook = transformBookForResponse(updatedBook);
+
     return res.status(200).json({
       success: true,
       message: `Successfully added ${newImageUrls.length} pages to book`,
-      book: updatedBook,
+      book: transformedBook,
       addedPages: newImageUrls.length,
       newTotalPages: updatedBook.page_count,
-      newTotalDuration: updatedBook.total_duration
+      newTotalDuration: newTotalDuration
     });
 
   } catch (error) {
@@ -1028,6 +1131,264 @@ export const addPagesToBook = asyncHandler(async (req: AuthenticatedRequest, res
     
     return res.status(500).json({
       error: 'Failed to add pages to book',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+/**
+ * Change the voice of an existing book
+ * POST /books/:id/change-voice
+ * Body: { voiceId: string }
+ */
+export const changeBookVoice = asyncHandler(async (req: AuthenticatedRequest, res: Response): Promise<any> => {
+  const userId = req.user.id;
+  const { id } = req.params;
+  const { voiceId } = req.body;
+
+  // Validate inputs
+  if (!id) {
+    return res.status(400).json({
+      error: 'Book ID is required'
+    });
+  }
+
+  if (!voiceId) {
+    return res.status(400).json({
+      error: 'Voice ID is required'
+    });
+  }
+
+  console.log(`Changing voice for book ${id} to voice ${voiceId} for user ${userId}`);
+
+  try {
+    // Get existing book and validate
+    const existingBook = await prisma.book.findFirst({
+      where: {
+        id: id,
+        user_id: userId
+      }
+    });
+
+    if (!existingBook) {
+      return res.status(404).json({
+        error: 'Book not found'
+      });
+    }
+
+    if (existingBook.status !== 'completed') {
+      return res.status(400).json({
+        error: 'Can only change voice for completed books'
+      });
+    }
+
+    // Validate that the voice belongs to the user
+    const voice = await prisma.userVoice.findFirst({
+      where: {
+        id: voiceId,
+        user_id: userId
+      }
+    });
+
+    if (!voice) {
+      return res.status(404).json({
+        error: 'Voice not found'
+      });
+    }
+
+    const voiceVersions = existingBook.voice_versions as unknown as VoiceVersion[];
+    
+    // Check if this voice version already exists
+    const existingVoiceVersion = voiceVersions.find(v => v.voiceId === voiceId);
+    
+    if (existingVoiceVersion) {
+      // Voice version already exists, just switch to it
+      console.log(`Voice version already exists, switching to voice ${voiceId}`);
+      
+      const updatedBook = await prisma.book.update({
+        where: { id: id },
+        data: {
+          current_voice_id: voiceId,
+          updated_at: new Date()
+        }
+      });
+
+      const transformedBook = transformBookForResponse(updatedBook);
+
+      return res.status(200).json({
+        success: true,
+        message: 'Successfully switched to existing voice version',
+        book: transformedBook,
+        currentVoice: voice.voice_name,
+        audioUrl: existingVoiceVersion.audioUrl,
+        totalDuration: existingVoiceVersion.totalDuration
+      });
+    }
+
+    // Voice version doesn't exist, need to create it
+    console.log(`Creating new voice version for voice ${voiceId}`);
+
+    // Get the text content for TTS conversion
+    const textContent = existingBook.text_content as string[];
+    
+    if (!textContent || textContent.length === 0) {
+      return res.status(400).json({
+        error: 'Book text content not available. Cannot create new voice version.'
+      });
+    }
+
+    // PHASE 1: Convert text to speech with new voice
+    console.log(`Converting ${textContent.length} text chunks to speech with new voice`);
+    
+    const ttsPayloads = textContent.map((text, index) => ({
+      payload: {
+        text,
+        voiceId,
+        userId,
+        bookId: id,
+        chunkIndex: index
+      }
+    }));
+
+    let newChunkUrls: any[] = [];
+
+    try {
+      // Execute all TTS tasks at once
+      const ttsBatchResult = await textToSpeech.batchTriggerAndWait(ttsPayloads);
+      console.log(`TTS batch completed`);
+
+      // Process TTS results
+      if (ttsBatchResult.runs) {
+        console.log(`Received ${ttsBatchResult.runs.length} TTS runs`);
+        
+        const ttsResults: any[] = [];
+        
+        for (let index = 0; index < ttsBatchResult.runs.length; index++) {
+          const run = ttsBatchResult.runs[index];
+          if (run.ok && run.output?.success) {
+            console.log(`✅ TTS ${index + 1} completed successfully`);
+            ttsResults[index] = {
+              chunkIndex: run.output.chunkIndex,
+              audioUrl: run.output.audioUrl,
+              duration: run.output.duration || 0
+            };
+          } else {
+            const errorMsg = 'error' in run ? run.error : 'Unknown TTS error';
+            console.error(`❌ Failed to process TTS ${index + 1}:`, errorMsg);
+            return res.status(500).json({
+              error: `Failed to convert text to speech for chunk ${index + 1}`,
+              details: errorMsg
+            });
+          }
+        }
+
+        // Filter out undefined results and sort by chunk index
+        newChunkUrls = ttsResults
+          .filter(result => result !== undefined)
+          .sort((a, b) => a.chunkIndex - b.chunkIndex);
+
+      } else {
+        console.error(`TTS batch result does not contain runs property:`, ttsBatchResult);
+        return res.status(500).json({
+          error: 'TTS batch processing failed'
+        });
+      }
+    } catch (error) {
+      console.error(`Error processing TTS batch:`, error);
+      return res.status(500).json({
+        error: 'Failed to process TTS batch',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+
+    console.log(`TTS processing complete. Total audio chunks: ${newChunkUrls.length}/${textContent.length}`);
+
+    if (newChunkUrls.length === 0) {
+      return res.status(500).json({
+        error: 'No audio was successfully generated from any text'
+      });
+    }
+
+    // PHASE 2: Combine audio chunks into final book
+    console.log('PHASE 2: Combining audio chunks into final book with new voice');
+
+    const combineResult = await tasks.triggerAndWait<typeof combineBookAudio>(
+      'combine-book-audio',
+      {
+        userId,
+        bookId: id,
+        totalChunks: newChunkUrls.length,
+        chunkUrls: newChunkUrls
+      }
+    );
+    
+    if (!combineResult.ok) {
+      console.error('Audio combination failed:', combineResult.error);
+      return res.status(500).json({
+        error: 'Failed to combine audio chunks for new voice',
+        details: combineResult.error
+      });
+    }
+    
+    console.log('Audio combination successful for new voice!');
+    
+    const finalAudioUrl = combineResult.output?.finalAudioUrl;
+    const totalDuration = combineResult.output?.totalDuration || 0;
+    
+    if (!finalAudioUrl) {
+      console.error('Final audio URL is missing or invalid', combineResult.output);
+      return res.status(500).json({
+        error: 'Final audio URL is missing or invalid'
+      });
+    }
+
+    // PHASE 3: Update book with new voice version
+    console.log('PHASE 3: Adding new voice version to book');
+    
+    const newVoiceVersion: VoiceVersion = {
+      voiceId: voiceId,
+      audioUrl: finalAudioUrl,
+      totalDuration: totalDuration
+    };
+
+    const updatedVoiceVersions = [...voiceVersions, newVoiceVersion];
+
+    // Carry over progress from previous voice to new voice
+    const currentProgress = getCurrentProgress(existingBook);
+    const currentVoiceProgress = (existingBook.voice_progress as any) || {};
+    currentVoiceProgress[voiceId] = currentProgress; // Set new voice to same progress
+
+    const updatedBook = await prisma.book.update({
+      where: { id: id },
+      data: {
+        voice_versions: updatedVoiceVersions as any,
+        current_voice_id: voiceId,
+        voice_progress: currentVoiceProgress,
+        updated_at: new Date()
+      }
+    });
+
+    console.log(`Book voice changed successfully: ${updatedBook.id}`);
+    console.log(`New voice: ${voice.voice_name} (${voiceId}) - Starting at ${currentProgress}s`);
+
+    const transformedBook = transformBookForResponse(updatedBook);
+
+    return res.status(200).json({
+      success: true,
+      message: `Successfully created and switched to new voice version: ${voice.voice_name}`,
+      book: transformedBook,
+      currentVoice: voice.voice_name,
+      audioUrl: finalAudioUrl,
+      totalDuration: totalDuration,
+      currentProgress: currentProgress, // Include the carried-over progress
+      totalVoiceVersions: updatedVoiceVersions.length
+    });
+
+  } catch (error) {
+    console.error('Error changing book voice:', error);
+    
+    return res.status(500).json({
+      error: 'Failed to change book voice',
       details: error instanceof Error ? error.message : 'Unknown error'
     });
   }

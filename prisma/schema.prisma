@@ -133,14 +133,17 @@ model Book {
   user    User   @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   // Book details
-  title          String
-  audio_url      String
-  total_duration Int // Duration in seconds
-  page_count     Int
-  image_urls     String[] // Array of image URLs
+  title        String
+  page_count   Int
+  image_urls   String[] // Array of image URLs
+  text_content String[] // Array of extracted text per page
 
-  // Progress tracking
-  progress Int @default(0) // Current position in seconds
+  // Voice versions - JSON array of {voiceId, audioUrl, totalDuration}
+  voice_versions   Json    @default("[]")
+  current_voice_id String? // Currently selected voice ID
+
+  // Progress tracking per voice version - JSON object {voiceId: progressInSeconds}
+  voice_progress Json @default("{}")
 
   // Status and metadata
   status     String   @default("completed") // completed, processing, failed
