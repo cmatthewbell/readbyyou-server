@@ -1,5 +1,6 @@
 import { task } from '@trigger.dev/sdk/v3';
 import OpenAI from 'openai';
+import { supabase } from '../config/supabase';
 
 interface Payload {
   imageUrl: string;
@@ -16,6 +17,27 @@ interface ExtractedText {
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
+
+/**
+ * Helper function to extract storage path from image URL
+ * URL format: https://project.supabase.co/storage/v1/object/public/book-images/userId/timestamp-uuid.jpg
+ */
+function extractImagePathFromUrl(url: string): string | null {
+  try {
+    // Extract the path after the bucket name
+    const urlParts = url.split('/');
+    const bucketIndex = urlParts.findIndex(part => part === 'book-images');
+    
+    if (bucketIndex === -1) return null;
+    
+    // Get the path after book-images/
+    const pathParts = urlParts.slice(bucketIndex + 1);
+    return pathParts.join('/');
+  } catch (error) {
+    console.warn('Failed to extract image path from URL:', url);
+    return null;
+  }
+}
 
 export const extractTextFromImage = task({
   id: 'extract-text-from-image',
@@ -104,6 +126,25 @@ EXAMPLE RESPONSE:
       }
 
       console.log(`Extracted ${result.text.length} characters from ${result.pageCount} page(s) with ${result.confidence} confidence`);
+      
+      // Delete the image from storage after successful extraction
+      try {
+        const imagePath = extractImagePathFromUrl(payload.imageUrl);
+        if (imagePath) {
+          const { error: deleteError } = await supabase.storage
+            .from('book-images')
+            .remove([imagePath]);
+            
+          if (deleteError) {
+            console.warn('Failed to delete image after OCR:', deleteError);
+          } else {
+            console.log(`Successfully deleted image: ${imagePath}`);
+          }
+        }
+      } catch (deleteError) {
+        console.warn('Error deleting image after OCR:', deleteError);
+        // Don't fail the task if image deletion fails
+      }
       
       return result;
 

@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { asyncHandler } from '../utils/asyncHandler';
 import { uploadMultipleImages } from '../utils/supabaseStorage';
+import { supabase } from '../config/supabase';
 import { extractTextFromImage } from '../trigger/extract-text-from-image';
 import { textToSpeech } from '../trigger/text-to-speech';
 import { combineBookAudio } from '../trigger/combine-book-audio';
@@ -312,7 +313,7 @@ ${allText.substring(0, 2000)}...`; // Limit text for API efficiency
         audio_url: finalAudioUrl,
         total_duration: combineResult.output.totalDuration || 0,
         page_count: imageUrls.length,
-        image_urls: imageUrls,
+        image_urls: [], // Images are deleted after OCR processing
         status: 'completed'
       }
     });
@@ -452,4 +453,102 @@ export const getBook = asyncHandler(async (req: AuthenticatedRequest, res: Respo
       details: error instanceof Error ? error.message : 'Unknown error'
     });
   }
-}); 
+});
+
+/**
+ * Delete a book and all its associated storage
+ * DELETE /books/:id
+ */
+export const deleteBook = asyncHandler(async (req: AuthenticatedRequest, res: Response): Promise<any> => {
+  const userId = req.user.id;
+  const { id } = req.params;
+  
+  if (!id) {
+    return res.status(400).json({
+      error: 'Book ID is required'
+    });
+  }
+  
+  try {
+    // First, get the book to ensure it exists and belongs to the user
+    const book = await prisma.book.findFirst({
+      where: {
+        id: id,
+        user_id: userId
+      }
+    });
+    
+    if (!book) {
+      return res.status(404).json({
+        error: 'Book not found'
+      });
+    }
+    
+    console.log(`Deleting book ${id} and all associated storage`);
+    
+    // Delete audio files from Supabase Storage (images are deleted during OCR processing)
+    let deletedFiles = 0;
+    
+    if (book.audio_url) {
+      const audioPath = extractStoragePathFromUrl(book.audio_url, userId, id);
+      if (audioPath) {
+        console.log(`Deleting audio file: ${audioPath}`);
+        
+        const { error: audioError } = await supabase.storage
+          .from('book-audio')
+          .remove([audioPath]);
+        
+        if (audioError) {
+          console.warn('Failed to delete audio file:', audioError);
+        } else {
+          console.log(`Deleted audio file: ${audioPath}`);
+          deletedFiles = 1;
+        }
+      }
+    }
+    
+    // 4. Delete book record from database
+    await prisma.book.delete({
+      where: {
+        id: id
+      }
+    });
+    
+    console.log(`Book ${id} deleted successfully`);
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Book and all associated files deleted successfully',
+      deletedFiles: deletedFiles
+    });
+    
+  } catch (error) {
+    console.error('Error deleting book:', error);
+    return res.status(500).json({
+      error: 'Failed to delete book',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+/**
+ * Helper function to extract storage path from audio URL
+ * URL format: https://project.supabase.co/storage/v1/object/public/book-audio/userId/bookId/complete-book.mp3
+ */
+function extractStoragePathFromUrl(url: string, userId: string, bookId: string): string | null {
+  try {
+    // Extract the path after the bucket name
+    const urlParts = url.split('/');
+    const bucketIndex = urlParts.findIndex(part => part === 'book-audio');
+    
+    if (bucketIndex === -1) return null;
+    
+    // Get the path after book-audio/
+    const pathParts = urlParts.slice(bucketIndex + 1);
+    return pathParts.join('/');
+  } catch (error) {
+    console.warn('Failed to extract audio path from URL:', url);
+    return null;
+  }
+}
+
