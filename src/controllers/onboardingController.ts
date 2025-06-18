@@ -2,6 +2,18 @@ import { Request, Response } from 'express';
 import { PrismaClient, OnboardingStep, AgeGroup, ReadingTime, ReferralSource, BookCategory } from '@prisma/client';
 import { asyncHandler } from '../utils/asyncHandler';
 import { client as elevenlabs } from '../config/elevenlabs';
+import { createVoiceClone } from '../trigger/create-voice-clone';
+import { tasks } from '@trigger.dev/sdk/v3';
+
+interface AuthenticatedRequest extends Request {
+  user?: {
+    id: string;
+    email: string;
+    provider: string;
+    provider_id: string;
+  };
+  files?: any[];
+}
 
 const prisma = new PrismaClient();
 
@@ -26,7 +38,7 @@ const validateStepProgression = (currentStep: OnboardingStep, requiredStep: Onbo
 };
 
 // GET /auth/onboarding/status - Get current onboarding status
-export const getOnboardingStatus = asyncHandler(async (req: Request, res: Response) => {
+export const getOnboardingStatus = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
   const userId = req.user?.id;
 
   const profile = await prisma.userProfile.findUnique({
@@ -65,7 +77,7 @@ export const getOnboardingStatus = asyncHandler(async (req: Request, res: Respon
 });
 
 // POST /auth/onboarding/age-group - Submit age group selection
-export const updateAgeGroup = asyncHandler(async (req: Request, res: Response) => {
+export const updateAgeGroup = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
   const userId = req.user?.id;
   const { age_group } = req.body;
 
@@ -113,7 +125,7 @@ export const updateAgeGroup = asyncHandler(async (req: Request, res: Response) =
 });
 
 // POST /auth/onboarding/name - Submit name
-export const updateName = asyncHandler(async (req: Request, res: Response) => {
+export const updateName = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
   const userId = req.user?.id;
   const { first_name } = req.body;
 
@@ -161,7 +173,7 @@ export const updateName = asyncHandler(async (req: Request, res: Response) => {
 });
 
 // POST /auth/onboarding/book-categories - Submit book category preferences
-export const updateBookCategories = asyncHandler(async (req: Request, res: Response) => {
+export const updateBookCategories = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
   const userId = req.user?.id;
   const { book_categories } = req.body;
 
@@ -220,7 +232,7 @@ export const updateBookCategories = asyncHandler(async (req: Request, res: Respo
 });
 
 // POST /auth/onboarding/reading-time - Submit daily reading time preference
-export const updateReadingTime = asyncHandler(async (req: Request, res: Response) => {
+export const updateReadingTime = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
   const userId = req.user?.id;
   const { daily_reading_time } = req.body;
 
@@ -268,7 +280,7 @@ export const updateReadingTime = asyncHandler(async (req: Request, res: Response
 });
 
 // POST /auth/onboarding/voice - Submit voice recording/upload for cloning
-export const updateVoice = asyncHandler(async (req: Request, res: Response) => {
+export const updateVoice = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
   const userId = req.user?.id;
   
   if (!userId) {
@@ -278,7 +290,8 @@ export const updateVoice = asyncHandler(async (req: Request, res: Response) => {
     });
   }
   
-  const { voice_name, audio_file_url } = req.body;
+  const { voice_name } = req.body;
+  const audioFiles = req.files;
 
   if (!voice_name || typeof voice_name !== 'string' || voice_name.trim().length === 0) {
     return res.status(400).json({
@@ -287,12 +300,21 @@ export const updateVoice = asyncHandler(async (req: Request, res: Response) => {
     });
   }
 
-  if (!audio_file_url || typeof audio_file_url !== 'string') {
+  if (!audioFiles || !Array.isArray(audioFiles) || audioFiles.length === 0) {
     return res.status(400).json({
       success: false,
-      message: 'Audio file URL is required'
+      message: 'Audio file is required'
     });
   }
+
+  if (audioFiles.length > 1) {
+    return res.status(400).json({
+      success: false,
+      message: 'Only one audio file allowed for voice cloning'
+    });
+  }
+
+  const audioFile = audioFiles[0];
 
   const profile = await prisma.userProfile.findUnique({
     where: { user_id: userId }
@@ -313,17 +335,30 @@ export const updateVoice = asyncHandler(async (req: Request, res: Response) => {
   }
 
   try {
-    // Create voice clone with ElevenLabs Instant Voice Cloning API
-    // Note: audio_file_url should be converted to a readable stream for the API
-    const response = await fetch(audio_file_url);
-    const audioBuffer = await response.arrayBuffer();
-    const audioBlob = new Blob([audioBuffer]);
-    
-    const voiceClone = await elevenlabs.voices.ivc.create({
-      name: voice_name.trim(),
-      files: [audioBlob as File], // Convert to File-like object
-      description: `Voice clone for ${profile.first_name || 'user'}`
-    });
+    // Use trigger task to create voice clone
+    console.log('Starting voice clone creation task...');
+    const voiceCloneResult = await tasks.triggerAndWait<typeof createVoiceClone>(
+      'create-voice-clone',
+      {
+        audioBuffer: audioFile.buffer,
+        originalFilename: audioFile.originalname,
+        voiceName: voice_name.trim(),
+        userId,
+        userFirstName: profile.first_name || undefined
+      }
+    );
+
+    if (!voiceCloneResult.ok) {
+      console.error('Voice clone task failed:', voiceCloneResult.error);
+      throw new Error(`Voice cloning task failed: ${voiceCloneResult.error}`);
+    }
+
+    if (!voiceCloneResult.output.success) {
+      console.error('Voice clone creation failed:', voiceCloneResult.output.error);
+      throw new Error(`Voice cloning failed: ${voiceCloneResult.output.error}`);
+    }
+
+    console.log('Voice clone created successfully');
 
     // Check if any existing voices are set as default
     const existingDefaultVoice = await prisma.userVoice.findFirst({
@@ -337,9 +372,9 @@ export const updateVoice = asyncHandler(async (req: Request, res: Response) => {
     const voice = await prisma.userVoice.create({
       data: {
         user_id: userId,
-        voice_name: voice_name.trim(),
-        audio_file_url,
-        elevenlabs_voice_id: voiceClone.voiceId,
+        voice_name: voiceCloneResult.output.voiceName!,
+        audio_file_url: null, // No longer storing the file
+        elevenlabs_voice_id: voiceCloneResult.output.elevenlabsVoiceId!,
         is_default: !existingDefaultVoice // First voice becomes default
       }
     });
@@ -374,7 +409,7 @@ export const updateVoice = asyncHandler(async (req: Request, res: Response) => {
       data: {
         user_id: userId,
         voice_name: voice_name.trim(),
-        audio_file_url,
+        audio_file_url: null,
         elevenlabs_voice_id: `placeholder_${Date.now()}`, // Placeholder ID
         is_default: true
       }
@@ -405,7 +440,7 @@ export const updateVoice = asyncHandler(async (req: Request, res: Response) => {
 });
 
 // POST /auth/onboarding/voice-demo/generate - Generate voice demo audio
-export const generateVoiceDemo = asyncHandler(async (req: Request, res: Response) => {
+export const generateVoiceDemo = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
   const userId = req.user?.id;
 
   if (!userId) {
@@ -511,7 +546,7 @@ export const generateVoiceDemo = asyncHandler(async (req: Request, res: Response
 });
 
 // POST /auth/onboarding/voice-demo - Mark voice demo as completed
-export const completeVoiceDemo = asyncHandler(async (req: Request, res: Response) => {
+export const completeVoiceDemo = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
   const userId = req.user?.id;
 
   const profile = await prisma.userProfile.findUnique({
@@ -549,7 +584,7 @@ export const completeVoiceDemo = asyncHandler(async (req: Request, res: Response
 });
 
 // POST /auth/onboarding/premium-trial - Handle premium subscription signup via RevenueCat
-export const handlePremiumTrial = asyncHandler(async (req: Request, res: Response) => {
+export const handlePremiumTrial = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
   const userId = req.user?.id;
   const { revenuecat_user_id } = req.body; // RevenueCat customer ID from app
 
@@ -606,7 +641,7 @@ export const handlePremiumTrial = asyncHandler(async (req: Request, res: Respons
 });
 
 // POST /auth/onboarding/referral-source - Submit referral source and complete onboarding
-export const completeOnboarding = asyncHandler(async (req: Request, res: Response) => {
+export const completeOnboarding = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
   const userId = req.user?.id;
   const { referral_source } = req.body;
 
