@@ -552,3 +552,186 @@ function extractStoragePathFromUrl(url: string, userId: string, bookId: string):
   }
 }
 
+/**
+ * Stream a book's audio with range request support
+ * GET /books/:id/stream
+ */
+export const streamBookAudio = asyncHandler(async (req: AuthenticatedRequest, res: Response): Promise<any> => {
+  const userId = req.user.id;
+  const { id } = req.params;
+  
+  if (!id) {
+    return res.status(400).json({
+      error: 'Book ID is required'
+    });
+  }
+  
+  try {
+    // Get the book to ensure it exists and belongs to the user
+    const book = await prisma.book.findFirst({
+      where: {
+        id: id,
+        user_id: userId
+      }
+    });
+    
+    if (!book) {
+      return res.status(404).json({
+        error: 'Book not found'
+      });
+    }
+    
+    if (!book.audio_url) {
+      return res.status(404).json({
+        error: 'Audio file not found for this book'
+      });
+    }
+    
+    // Get the audio file from Supabase Storage
+    const audioPath = extractStoragePathFromUrl(book.audio_url, userId, id);
+    if (!audioPath) {
+      return res.status(500).json({
+        error: 'Invalid audio file path'
+      });
+    }
+    
+    // Download the file from Supabase Storage to get metadata
+    const { data: audioFile, error: downloadError } = await supabase.storage
+      .from('book-audio')
+      .download(audioPath);
+      
+    if (downloadError || !audioFile) {
+      console.error('Failed to download audio file:', downloadError);
+      return res.status(500).json({
+        error: 'Failed to access audio file'
+      });
+    }
+    
+    // Get file size
+    const fileSize = audioFile.size;
+    const range = req.headers.range;
+    
+    if (range) {
+      // Handle range requests for seeking/progressive download
+      const parts = range.replace(/bytes=/, '').split('-');
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+      const chunkSize = (end - start) + 1;
+      
+      // Set partial content headers
+      res.status(206); // Partial Content
+      res.set({
+        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': chunkSize.toString(),
+        'Content-Type': 'audio/mpeg',
+        'Cache-Control': 'public, max-age=31536000', // Cache for 1 year
+      });
+      
+      // Stream the requested chunk
+      const audioBuffer = await audioFile.arrayBuffer();
+      const chunk = Buffer.from(audioBuffer).slice(start, end + 1);
+      return res.send(chunk);
+      
+    } else {
+      // Handle full file requests
+      res.set({
+        'Content-Length': fileSize.toString(),
+        'Content-Type': 'audio/mpeg',
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'public, max-age=31536000', // Cache for 1 year
+      });
+      
+      // Stream the entire file
+      const audioBuffer = await audioFile.arrayBuffer();
+      return res.send(Buffer.from(audioBuffer));
+    }
+    
+  } catch (error) {
+         console.error('Error streaming audio:', error);
+     return res.status(500).json({
+       error: 'Failed to stream audio',
+       details: error instanceof Error ? error.message : 'Unknown error'
+     });
+   }
+ });
+
+/**
+ * Update book progress (current listening position)
+ * PATCH /books/:id/progress
+ * Body: { currentTime: number } // Current audio timestamp in seconds
+ */
+export const updateBookProgress = asyncHandler(async (req: AuthenticatedRequest, res: Response): Promise<any> => {
+  const userId = req.user.id;
+  const { id } = req.params;
+  const { currentTime } = req.body;
+  
+  if (!id) {
+    return res.status(400).json({
+      error: 'Book ID is required'
+    });
+  }
+  
+  if (typeof currentTime !== 'number' || currentTime < 0) {
+    return res.status(400).json({
+      error: 'currentTime must be a non-negative number (seconds)'
+    });
+  }
+  
+  try {
+    // Check if book exists and belongs to user
+    const existingBook = await prisma.book.findFirst({
+      where: {
+        id: id,
+        user_id: userId
+      }
+    });
+    
+    if (!existingBook) {
+      return res.status(404).json({
+        error: 'Book not found'
+      });
+    }
+    
+    // Validate currentTime doesn't exceed total duration (with small buffer for rounding)
+    if (currentTime > existingBook.total_duration + 5) {
+      return res.status(400).json({
+        error: `Current time cannot exceed total duration (${existingBook.total_duration} seconds)`
+      });
+    }
+    
+    // Calculate percentage progress
+    const progressPercentage = existingBook.total_duration > 0 
+      ? Math.min((currentTime / existingBook.total_duration) * 100, 100)
+      : 0;
+    
+    // Update progress
+    const updatedBook = await prisma.book.update({
+      where: {
+        id: id
+      },
+      data: {
+        progress: Math.round(currentTime),
+        updated_at: new Date()
+      }
+    });
+    
+    console.log(`Updated progress for book ${id}: ${currentTime}s / ${existingBook.total_duration}s (${progressPercentage.toFixed(1)}%)`);
+    
+    return res.status(200).json({
+      success: true,
+      book: updatedBook,
+      progressPercentage: Math.round(progressPercentage * 10) / 10, // Round to 1 decimal place
+      currentTime: Math.round(currentTime),
+      totalDuration: existingBook.total_duration
+    });
+    
+  } catch (error) {
+    console.error('Error updating book progress:', error);
+    return res.status(500).json({
+      error: 'Failed to update book progress',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { createBook, getUserBooks, getBook, deleteBook } from '../controllers/bookController';
+import { createBook, getUserBooks, getBook, deleteBook, streamBookAudio, updateBookProgress } from '../controllers/bookController';
 import { authenticateUser } from '../middleware/auth';
 
 const router = Router();
@@ -9,6 +9,12 @@ router.get('/', authenticateUser, getUserBooks);
 
 // GET /books/:id - Get a single book by ID
 router.get('/:id', authenticateUser, getBook);
+
+// GET /books/:id/stream - Stream book audio with range request support
+router.get('/:id/stream', authenticateUser, streamBookAudio);
+
+// PATCH /books/:id/progress - Update book listening progress
+router.patch('/:id/progress', authenticateUser, updateBookProgress);
 
 // DELETE /books/:id - Delete a book and all its associated storage
 router.delete('/:id', authenticateUser, deleteBook);
