@@ -4,7 +4,8 @@ import {
   appleAuth, 
   authCallback, 
   getUserInfo, 
-  logout, 
+  logout,
+  logoutFromAllDevices,
   getAuthStatus,
   refreshToken
 } from '../controllers/authController';
@@ -26,6 +27,7 @@ router.post('/refresh', refreshToken);
 // User management routes (require JWT authentication)
 router.get('/user', authenticateUser, getUserInfo);
 router.post('/logout', logout); // Logout doesn't require auth since it just invalidates tokens
+router.post('/logout-all-devices', authenticateUser, logoutFromAllDevices); // Requires auth to know which user
 router.get('/status', optionalAuth, getAuthStatus); // Optional auth for status check
 
 export default router;

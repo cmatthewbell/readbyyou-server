@@ -344,18 +344,81 @@ export const getUserInfo = asyncHandler(async (req: Request, res: Response): Pro
   return res.status(200).json(response);
 });
 
+// Logout user from all devices (invalidate all refresh tokens for user)
+export const logoutFromAllDevices = asyncHandler(async (req: Request, res: Response): Promise<any> => {
+  // This endpoint requires authentication since we need to know which user's tokens to invalidate
+  if (!req.user) {
+    const errorResponse: ApiResponse = {
+      success: false,
+      message: 'Authentication required'
+    };
+    return res.status(401).json(errorResponse);
+  }
+
+  try {
+    // Delete ALL refresh tokens for this user
+    const deletedTokens = await prisma.refreshToken.deleteMany({
+      where: { user_id: req.user.id }
+    });
+
+    console.log(`Logout from all devices: Invalidated ${deletedTokens.count} refresh token(s) for user ${req.user.id}`);
+
+    const response: ApiResponse = {
+      success: true,
+      message: 'Logged out from all devices successfully',
+      data: {
+        tokensInvalidated: deletedTokens.count
+      }
+    };
+
+    return res.status(200).json(response);
+  } catch (error) {
+    console.error('Logout from all devices error:', error);
+    const errorResponse: ApiResponse = {
+      success: false,
+      message: 'Failed to logout from all devices',
+      error: error instanceof Error ? error.message : 'Unknown error'
+    };
+    return res.status(500).json(errorResponse);
+  }
+});
+
 // Logout user (invalidate refresh token)
 export const logout = asyncHandler(async (req: Request, res: Response): Promise<any> => {
   try {
     const { refreshToken } = req.body;
 
     if (refreshToken) {
-      // Delete refresh token from database
-      await prisma.refreshToken.deleteMany({
+      // First, try to decode the token to get user info (even if expired)
+      let userId: string | null = null;
+      try {
+        const decoded = jwt.decode(refreshToken) as any;
+        if (decoded?.userId) {
+          userId = decoded.userId;
+        }
+      } catch (decodeError) {
+        // If we can't decode, we'll just delete by token value
+      }
+
+      // Delete the specific refresh token from database
+      const deletedToken = await prisma.refreshToken.deleteMany({
         where: { token: refreshToken }
       });
+
+      // Security measure: If we have the user ID and the token was found,
+      // this indicates a valid logout request. For extra security in high-risk scenarios,
+      // you could invalidate ALL tokens for this user by uncommenting below:
+      // if (userId && deletedToken.count > 0) {
+      //   await prisma.refreshToken.deleteMany({
+      //     where: { user_id: userId }
+      //   });
+      // }
+
+      console.log(`Logout: Invalidated ${deletedToken.count} refresh token(s)`);
     }
 
+    // Always return success - don't reveal whether token existed or not
+    // This prevents token enumeration attacks
     const response: ApiResponse = {
       success: true,
       message: 'Logged out successfully'
@@ -364,12 +427,14 @@ export const logout = asyncHandler(async (req: Request, res: Response): Promise<
     return res.status(200).json(response);
   } catch (error) {
     console.error('Logout error:', error);
-    const errorResponse: ApiResponse = {
-      success: false,
-      message: 'Failed to logout',
-      error: error instanceof Error ? error.message : 'Unknown error'
+    
+    // Still return success to prevent information leakage
+    // In production, you don't want to reveal internal errors for logout
+    const response: ApiResponse = {
+      success: true,
+      message: 'Logged out successfully'
     };
-    return res.status(500).json(errorResponse);
+    return res.status(200).json(response);
   }
 });
 
