@@ -1,271 +1,359 @@
-import { Request, Response } from 'express';
-import { supabase, supabaseAdmin } from '../config/supabase';
+import { Request, Response, NextFunction } from 'express';
+import passport from 'passport';
+import jwt from 'jsonwebtoken';
 import prisma from '../config/database';
-import { ApiResponse, AuthResponse, AuthCallbackRequest } from '../types';
+import { ApiResponse } from '../types';
+import { asyncHandler } from '../utils/asyncHandler';
 
-export const getAuthUrl = async (req: Request, res: Response) => {
+// JWT Token interfaces
+interface TokenPayload {
+  userId: string;
+  email: string;
+  provider: string;
+}
+
+interface AuthTokens {
+  accessToken: string;
+  refreshToken: string;
+  expiresIn: number;
+}
+
+// Extend Express Request to include user
+declare global {
+  namespace Express {
+    interface User {
+      id: string;
+      email: string;
+      provider: string;
+      provider_id: string;
+    }
+  }
+}
+
+// JWT Helper Functions
+const generateTokens = (payload: TokenPayload): AuthTokens => {
+  const accessToken = jwt.sign(
+    payload,
+    process.env.JWT_ACCESS_SECRET!,
+    { expiresIn: '15m' }
+  );
+  
+  const refreshToken = jwt.sign(
+    payload,
+    process.env.JWT_REFRESH_SECRET!,
+    { expiresIn: '30d' }
+  );
+
+  return {
+    accessToken,
+    refreshToken,
+    expiresIn: 15 * 60 // 15 minutes in seconds
+  };
+};
+
+const verifyAccessToken = (token: string): TokenPayload | null => {
   try {
-    const { provider } = req.params;
-    
-    if (!provider || !['google', 'apple'].includes(provider)) {
-      const errorResponse: ApiResponse = {
-        success: false,
-        message: 'Invalid provider. Use "google" or "apple"',
-        error: 'INVALID_PROVIDER'
-      };
-      return res.status(400).json(errorResponse);
-    }
-
-    const { data, error } = await supabase.auth.signInWithOAuth({
-      provider: provider as 'google' | 'apple',
-      options: {
-        redirectTo: `${process.env.SUPABASE_URL}/auth/v1/callback`,
-        queryParams: {
-          access_type: 'offline',
-          prompt: 'consent'
-        }
-      }
-    });
-
-    if (error) {
-      console.error('OAuth URL generation error:', error);
-      const errorResponse: ApiResponse = {
-        success: false,
-        message: 'Failed to generate OAuth URL',
-        error: error.message
-      };
-      return res.status(500).json(errorResponse);
-    }
-
-    const response: ApiResponse = {
-      success: true,
-      message: 'OAuth URL generated successfully',
-      data: {
-        auth_url: data.url,
-        provider
-      }
-    };
-
-    return res.status(200).json(response);
+    return jwt.verify(token, process.env.JWT_ACCESS_SECRET!) as TokenPayload;
   } catch (error) {
-    console.error('Auth URL error:', error);
-    const errorResponse: ApiResponse = {
-      success: false,
-      message: 'Failed to initiate OAuth',
-      error: error instanceof Error ? error.message : 'Unknown error'
-    };
-    return res.status(500).json(errorResponse);
+    return null;
   }
 };
 
-export const handleAuthCallback = async (req: Request, res: Response) => {
+const verifyRefreshToken = (token: string): TokenPayload | null => {
   try {
-    const code = req.query.code as string;
-    const authError = req.query.error as string;
+    return jwt.verify(token, process.env.JWT_REFRESH_SECRET!) as TokenPayload;
+  } catch (error) {
+    return null;
+  }
+};
 
-    if (authError) {
-      console.error('OAuth callback error:', authError);
-      const errorResponse: ApiResponse = {
-        success: false,
-        message: 'OAuth authentication failed',
-        error: authError
-      };
-      return res.status(400).json(errorResponse);
-    }
+// Google OAuth login
+export const googleAuth = passport.authenticate('google', {
+  scope: ['profile', 'email']
+});
 
-    if (!code) {
-      const errorResponse: ApiResponse = {
-        success: false,
-        message: 'Authorization code missing',
-        error: 'MISSING_CODE'
-      };
-      return res.status(400).json(errorResponse);
-    }
+// Apple OAuth login  
+export const appleAuth = passport.authenticate('apple', {
+  scope: ['name', 'email']
+});
 
-    // Exchange code for session
-    const { data, error } = await supabase.auth.exchangeCodeForSession(code);
-
-    if (error || !data.user) {
-      console.error('Code exchange error:', error);
-      const errorResponse: ApiResponse = {
-        success: false,
-        message: 'Failed to exchange code for session',
-        error: error?.message || 'Unknown error'
-      };
-      return res.status(400).json(errorResponse);
-    }
-
-    const { user, session } = data;
-
-    // Check if user exists in our database
-    let existingUser = await prisma.user.findUnique({
-      where: { email: user.email! },
-      include: {
-        profile: true
+// OAuth callback handler - handles both Google and Apple
+export const authCallback = asyncHandler(async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+  // Determine provider from the URL path
+  const provider = req.path.includes('google') ? 'google' : 'apple';
+  
+  // Get the redirect_uri from query params (sent by the mobile app)
+  const mobileRedirectUri = req.query.redirect_uri as string;
+  
+  return new Promise((resolve) => {
+    passport.authenticate(provider, async (err: any, profile: any) => {
+      if (err) {
+        console.error(`${provider} auth error:`, err);
+        const errorUrl = mobileRedirectUri 
+          ? `${mobileRedirectUri}?error=${encodeURIComponent('Authentication failed')}`
+          : `readbyyouclient://auth/callback?error=${encodeURIComponent('Authentication failed')}`;
+        res.redirect(errorUrl);
+        return resolve(undefined);
       }
-    });
 
-    let isNewUser = false;
-    let userId: string;
-    let userEmail: string;
-    let userProvider: string;
-    let userProviderId: string;
-    let userProfile;
+      if (!profile) {
+        const errorUrl = mobileRedirectUri 
+          ? `${mobileRedirectUri}?error=${encodeURIComponent('Authentication cancelled')}`
+          : `readbyyouclient://auth/callback?error=${encodeURIComponent('Authentication cancelled')}`;
+        res.redirect(errorUrl);
+        return resolve(undefined);
+      }
 
-    // Create user if doesn't exist
-    if (!existingUser) {
-      const provider = user.app_metadata.provider || 'unknown';
-      const providerId = user.user_metadata.provider_id || user.id;
+      try {
+        // Check if user exists in our database
+        let existingUser = await prisma.user.findUnique({
+          where: { email: profile.emails[0].value },
+          include: { profile: true }
+        });
 
-      // Create user
-      const newUser = await prisma.user.create({
-        data: {
-          email: user.email!,
-          provider_id: providerId,
-          provider: provider
+        let isNewUser = false;
+        let userId: string;
+        let userEmail: string;
+        let userProvider: string;
+        let userProfile;
+
+        // Create user if doesn't exist
+        if (!existingUser) {
+          const newUser = await prisma.user.create({
+            data: {
+              email: profile.emails[0].value,
+              provider_id: profile.id,
+              provider: provider
+            }
+          });
+
+          // Create empty profile for new user
+          userProfile = await prisma.userProfile.create({
+            data: {
+              user_id: newUser.id,
+              onboarding_step: 'AGE',
+              onboarding_completed: false
+            }
+          });
+
+          userId = newUser.id;
+          userEmail = newUser.email;
+          userProvider = newUser.provider;
+          isNewUser = true;
+        } else {
+          userProfile = existingUser.profile;
+          
+          // If user exists but has no profile, create one (edge case)
+          if (!userProfile) {
+            userProfile = await prisma.userProfile.create({
+              data: {
+                user_id: existingUser.id,
+                onboarding_step: 'AGE',
+                onboarding_completed: false
+              }
+            });
+          }
+
+          userId = existingUser.id;
+          userEmail = existingUser.email;
+          userProvider = existingUser.provider;
         }
-      });
 
-      // Create empty profile for new user
-      userProfile = await prisma.userProfile.create({
-        data: {
-          user_id: newUser.id,
-          onboarding_step: 'AGE',
-          onboarding_completed: false
-        }
-      });
+        // Generate JWT tokens
+        const tokens = generateTokens({
+          userId,
+          email: userEmail,
+          provider: userProvider
+        });
 
-      // Set user data
-      userId = newUser.id;
-      userEmail = newUser.email;
-      userProvider = newUser.provider;
-      userProviderId = newUser.provider_id;
-      isNewUser = true;
-    } else {
-      userProfile = existingUser.profile;
-      
-      // If user exists but has no profile, create one (edge case)
-      if (!userProfile) {
-        userProfile = await prisma.userProfile.create({
+        // Store refresh token in database
+        await prisma.refreshToken.create({
           data: {
-            user_id: existingUser.id,
-            onboarding_step: 'AGE',
-            onboarding_completed: false
+            token: tokens.refreshToken,
+            user_id: userId,
+            expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) // 30 days
           }
         });
+
+        // Build success redirect URL using the mobile redirect URI
+        const baseUrl = mobileRedirectUri || 'readbyyouclient://auth/callback';
+        const params = new URLSearchParams({
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken,
+          expiresIn: tokens.expiresIn.toString(),
+          isNewUser: isNewUser.toString(),
+          onboardingRequired: (isNewUser || !userProfile.onboarding_completed).toString(),
+          userId: userId
+        });
+        
+        if (isNewUser || !userProfile.onboarding_completed) {
+          params.set('onboardingStep', userProfile.onboarding_step || 'AGE');
+        }
+
+        console.log(`Redirecting to: ${baseUrl}?${params.toString()}`);
+        res.redirect(`${baseUrl}?${params.toString()}`);
+        return resolve(undefined);
+
+      } catch (error) {
+        console.error('Database error during auth:', error);
+        const errorUrl = mobileRedirectUri 
+          ? `${mobileRedirectUri}?error=${encodeURIComponent('Database error')}`
+          : `readbyyouclient://auth/callback?error=${encodeURIComponent('Database error')}`;
+        res.redirect(errorUrl);
+        return resolve(undefined);
       }
+    })(req, res, next);
+  });
+});
 
-      // Set user data from existing user
-      userId = existingUser.id;
-      userEmail = existingUser.email;
-      userProvider = existingUser.provider;
-      userProviderId = existingUser.provider_id;
-    }
+// Refresh token endpoint with rotation
+export const refreshToken = asyncHandler(async (req: Request, res: Response): Promise<any> => {
+  const { refreshToken } = req.body;
 
-    // At this point, all variables are guaranteed to exist
-    const onboardingRequired = !userProfile.onboarding_completed;
-
-    const authResponse: AuthResponse = {
-      user: {
-        id: userId,
-        email: userEmail,
-        provider: userProvider,
-        provider_id: userProviderId
-      },
-      token: session.access_token,
-      onboarding_required: onboardingRequired,
-      is_new_user: isNewUser,
-      current_onboarding_step: userProfile.onboarding_step
-    };
-
-    const response: ApiResponse<AuthResponse> = {
-      success: true,
-      message: 'Authentication successful',
-      data: authResponse
-    };
-
-    return res.status(200).json(response);
-  } catch (error) {
-    console.error('Auth callback error:', error);
+  if (!refreshToken) {
     const errorResponse: ApiResponse = {
       success: false,
-      message: 'Authentication callback failed',
-      error: error instanceof Error ? error.message : 'Unknown error'
+      message: 'Refresh token required'
     };
-    return res.status(500).json(errorResponse);
+    return res.status(400).json(errorResponse);
   }
-};
 
-export const getUserInfo = async (req: Request, res: Response) => {
   try {
-    if (!req.user) {
+    // Verify refresh token JWT
+    const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET!) as TokenPayload;
+    
+    // Check if refresh token exists in database and is not expired
+    const storedToken = await prisma.refreshToken.findFirst({
+      where: {
+        token: refreshToken,
+        user_id: decoded.userId,
+        expires_at: {
+          gt: new Date()
+        }
+      }
+    });
+
+    if (!storedToken) {
+      // Token doesn't exist or is expired - revoke all tokens for this user (security measure)
+      await prisma.refreshToken.deleteMany({
+        where: { user_id: decoded.userId }
+      });
+      
       const errorResponse: ApiResponse = {
         success: false,
-        message: 'User not authenticated',
-        error: 'UNAUTHORIZED'
+        message: 'Invalid or expired refresh token'
       };
       return res.status(401).json(errorResponse);
     }
 
-    // Get user with profile
-    const user = await prisma.user.findUnique({
-      where: { id: req.user.id },
-      include: {
-        profile: true
+    // Generate new tokens
+    const newTokens = generateTokens({
+      userId: decoded.userId,
+      email: decoded.email,
+      provider: decoded.provider
+    });
+
+    // Remove old refresh token (token rotation for security)
+    await prisma.refreshToken.delete({
+      where: { id: storedToken.id }
+    });
+
+    // Store new refresh token
+    await prisma.refreshToken.create({
+      data: {
+        token: newTokens.refreshToken,
+        user_id: decoded.userId,
+        expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) // 30 days
       }
     });
 
-    if (!user) {
-      const errorResponse: ApiResponse = {
-        success: false,
-        message: 'User not found',
-        error: 'USER_NOT_FOUND'
-      };
-      return res.status(404).json(errorResponse);
-    }
-
     const response: ApiResponse = {
       success: true,
-      message: 'User info retrieved successfully',
-      data: {
-        user: {
-          id: user.id,
-          email: user.email,
-          provider: user.provider,
-          created_at: user.created_at
-        },
-        profile: user.profile ? {
-          onboarding_completed: user.profile.onboarding_completed,
-          onboarding_step: user.profile.onboarding_step
-        } : null
-      }
+      message: 'Tokens refreshed successfully',
+      data: newTokens
     };
-
     return res.status(200).json(response);
+
   } catch (error) {
-    console.error('Get user info error:', error);
+    console.error('Refresh token error:', error);
+    
+    // If JWT is invalid, try to revoke any tokens with the same signature
+    try {
+      const decoded = jwt.decode(refreshToken) as any;
+      if (decoded?.userId) {
+        await prisma.refreshToken.deleteMany({
+          where: { user_id: decoded.userId }
+        });
+      }
+    } catch (decodeError) {
+      // Ignore decode errors
+    }
+
     const errorResponse: ApiResponse = {
       success: false,
-      message: 'Failed to retrieve user info',
-      error: error instanceof Error ? error.message : 'Unknown error'
+      message: 'Invalid refresh token'
     };
-    return res.status(500).json(errorResponse);
+    return res.status(401).json(errorResponse);
   }
-};
+});
 
-export const logout = async (req: Request, res: Response) => {
+// Get current user info (requires authentication via JWT middleware)
+export const getUserInfo = asyncHandler(async (req: Request, res: Response): Promise<any> => {
+  // User is already authenticated and attached to req.user by JWT middleware
+  if (!req.user) {
+    const errorResponse: ApiResponse = {
+      success: false,
+      message: 'Authentication required'
+    };
+    return res.status(401).json(errorResponse);
+  }
+
+  // Get user with profile
+  const user = await prisma.user.findUnique({
+    where: { id: req.user.id },
+    include: {
+      profile: true
+    }
+  });
+
+  if (!user) {
+    const errorResponse: ApiResponse = {
+      success: false,
+      message: 'User not found'
+    };
+    return res.status(404).json(errorResponse);
+  }
+
+  const response: ApiResponse = {
+    success: true,
+    message: 'User info retrieved successfully',
+    data: {
+      user: {
+        id: user.id,
+        email: user.email,
+        provider: user.provider,
+        created_at: user.created_at
+      },
+      profile: user.profile ? {
+        onboarding_completed: user.profile.onboarding_completed,
+        onboarding_step: user.profile.onboarding_step
+      } : null
+    }
+  };
+
+  return res.status(200).json(response);
+});
+
+// Logout user (invalidate refresh token)
+export const logout = asyncHandler(async (req: Request, res: Response): Promise<any> => {
   try {
-    const authHeader = req.headers.authorization;
-    
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      const token = authHeader.substring(7);
-      
-      // Sign out from Supabase
-      const { error } = await supabase.auth.admin.signOut(token);
-      
-      if (error) {
-        console.error('Logout error:', error);
-      }
+    const { refreshToken } = req.body;
+
+    if (refreshToken) {
+      // Delete refresh token from database
+      await prisma.refreshToken.deleteMany({
+        where: { token: refreshToken }
+      });
     }
 
     const response: ApiResponse = {
@@ -278,49 +366,35 @@ export const logout = async (req: Request, res: Response) => {
     console.error('Logout error:', error);
     const errorResponse: ApiResponse = {
       success: false,
-      message: 'Logout failed',
+      message: 'Failed to logout',
       error: error instanceof Error ? error.message : 'Unknown error'
     };
     return res.status(500).json(errorResponse);
   }
-};
+});
 
-// GET /auth/status - Quick status check for routing decisions
-export const getAuthStatus = async (req: Request, res: Response) => {
-  try {
-    if (!req.user) {
-      return res.status(200).json({
-        success: true,
-        data: {
-          authenticated: false,
-          onboarding_required: true
-        }
-      });
+// Get auth status for routing decisions (uses optional auth middleware)
+export const getAuthStatus = asyncHandler(async (req: Request, res: Response): Promise<any> => {
+  let isAuthenticated = false;
+  let user = null;
+
+  if (req.user) {
+    isAuthenticated = true;
+    user = {
+      id: req.user.id,
+      email: req.user.email,
+      provider: req.user.provider
+    };
+  }
+
+  const response: ApiResponse = {
+    success: true,
+    message: 'Auth status retrieved',
+    data: {
+      isAuthenticated,
+      user
     }
+  };
 
-    // Get user profile
-    const profile = await prisma.userProfile.findUnique({
-      where: { user_id: req.user.id }
-    });
-
-    const response: ApiResponse = {
-      success: true,
-      message: 'Auth status retrieved successfully',
-      data: {
-        authenticated: true,
-        onboarding_required: !profile?.onboarding_completed,
-        current_onboarding_step: profile?.onboarding_step || 'AGE'
-      }
-    };
-
-    return res.status(200).json(response);
-  } catch (error) {
-    console.error('Auth status error:', error);
-    const errorResponse: ApiResponse = {
-      success: false,
-      message: 'Failed to get auth status',
-      error: error instanceof Error ? error.message : 'Unknown error'
-    };
-    return res.status(500).json(errorResponse);
-  }
-}; 
+  return res.status(200).json(response);
+}); 

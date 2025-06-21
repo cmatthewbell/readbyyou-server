@@ -1,32 +1,31 @@
 import express from 'express';
-import routes from './routes';
-import { errorHandler } from './middleware/errorHandler';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import './config/passport'; // Initialize Passport strategies
+
+// Load environment variables
+dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8000;
 
 // Middleware
+app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Request logging middleware
-app.use((req, res, next) => {
-  try {
-    console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
-    next();
-  } catch (error) {
-    console.error('Logging middleware error:', error);
-    next(error);
-  }
-});
-
 // Routes
-app.use('/api/v1', routes);
+app.use('/api/v1/auth', require('./routes/auth').default);
+app.use('/api/v1/books', require('./routes/books').default);
+app.use('/api/v1/voices', require('./routes/voices').default);
+app.use('/api/v1/webhooks', require('./routes/webhooks').default);
+app.use('/api/v1/health', require('./routes/health').default);
+app.use('/api/v1', require('./routes/index').default);
 
-// Global error handler (must be last)
-app.use(errorHandler);
+// Error handling middleware
+app.use(require('./middleware/errorHandler').errorHandler);
 
 app.listen(PORT, () => {
-  console.log(`🚀 Express server running on http://localhost:${PORT}`);
-  console.log(`📊 Health check available at http://localhost:${PORT}/api/v1/health`);
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`📍 Base URL: ${process.env.BASE_URL || `http://localhost:${PORT}`}`);
 }); 

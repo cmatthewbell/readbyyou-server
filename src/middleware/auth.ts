@@ -1,130 +1,77 @@
 import { Request, Response, NextFunction } from 'express';
-import { supabase } from '../config/supabase';
+import passport from 'passport';
+import jwt from 'jsonwebtoken';
 import prisma from '../config/database';
 import { ApiResponse } from '../types';
 
-export const authenticateUser = async (req: Request, res: Response, next: NextFunction): Promise<any> => {
-  try {
-    const authHeader = req.headers.authorization;
-    
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+// Remove the custom Express.User interface - we'll use the Prisma user object directly
+// This is the standard approach that most Node.js apps use
+
+// JWT Authentication middleware - replaces session-based auth
+export const authenticateUser = (req: Request, res: Response, next: NextFunction): void => {
+  passport.authenticate('jwt', { session: false }, (err: any, user: any) => {
+    if (err) {
       const errorResponse: ApiResponse = {
         success: false,
-        message: 'Authorization header missing or invalid',
-        error: 'UNAUTHORIZED'
+        message: 'Authentication error',
+        error: err.message
       };
-      return res.status(401).json(errorResponse);
+      res.status(500).json(errorResponse);
+      return;
     }
 
-    const token = authHeader.substring(7); // Remove 'Bearer ' prefix
-
-    // Verify the token with Supabase
-    const { data: { user }, error } = await supabase.auth.getUser(token);
-
-    if (error || !user) {
-      console.error('Token verification failed:', error);
+    if (!user) {
       const errorResponse: ApiResponse = {
         success: false,
-        message: 'Invalid or expired token',
-        error: 'UNAUTHORIZED'
+        message: 'Authentication required',
+        error: 'Invalid or expired token'
       };
-      return res.status(401).json(errorResponse);
+      res.status(401).json(errorResponse);
+      return;
     }
 
-    // Get user from database
-    const dbUser = await prisma.user.findUnique({
-      where: { email: user.email! },
-      include: {
-        profile: true
-      }
-    });
-
-    if (!dbUser) {
-      const errorResponse: ApiResponse = {
-        success: false,
-        message: 'User not found in database',
-        error: 'USER_NOT_FOUND'
-      };
-      return res.status(404).json(errorResponse);
-    }
-
-    // Attach user to request
-    req.user = {
-      id: dbUser.id,
-      email: dbUser.email,
-      provider: dbUser.provider,
-      provider_id: dbUser.provider_id
-    };
-
-    return next();
-  } catch (error) {
-    console.error('Authentication error:', error);
-    const errorResponse: ApiResponse = {
-      success: false,
-      message: 'Authentication failed',
-      error: error instanceof Error ? error.message : 'Unknown error'
-    };
-    return res.status(500).json(errorResponse);
-  }
+    req.user = user;
+    next();
+  })(req, res, next);
 };
 
-// Optional authentication - doesn't return error if no token
-export const optionalAuth = async (req: Request, res: Response, next: NextFunction): Promise<any> => {
-  try {
-    const authHeader = req.headers.authorization;
-    
-    // If no auth header, continue without user
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return next();
-    }
-
-    const token = authHeader.substring(7); // Remove 'Bearer ' prefix
-
-    // Verify the token with Supabase
-    const { data: { user }, error } = await supabase.auth.getUser(token);
-
-    if (error || !user) {
-      // Continue without user if token is invalid
-      return next();
-    }
-
-    // Get user from database
-    const dbUser = await prisma.user.findUnique({
-      where: { email: user.email! },
-      include: {
-        profile: true
-      }
-    });
-
-    if (dbUser) {
-      // Attach user to request if found
-      req.user = {
-        id: dbUser.id,
-        email: dbUser.email,
-        provider: dbUser.provider,
-        provider_id: dbUser.provider_id
-      };
-    }
-
-    return next();
-  } catch (error) {
-    // Continue without user if any error occurs
-    console.error('Optional auth error:', error);
-    return next();
+// Optional authentication - doesn't fail if no token
+export const optionalAuth = (req: Request, res: Response, next: NextFunction): void => {
+  const authHeader = req.headers.authorization;
+  
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    next(); // No token, continue without user
+    return;
   }
+
+  passport.authenticate('jwt', { session: false }, (err: any, user: any) => {
+    if (err) {
+      console.error('Optional auth error:', err);
+      next(); // Continue without user on error
+      return;
+    }
+
+    if (user) {
+      req.user = user;
+    }
+    
+    next();
+  })(req, res, next);
 };
 
-export const requireOnboarding = async (req: Request, res: Response, next: NextFunction): Promise<any> => {
+// Require completed onboarding
+export const requireOnboarding = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     if (!req.user) {
       const errorResponse: ApiResponse = {
         success: false,
-        message: 'User not authenticated',
-        error: 'UNAUTHORIZED'
+        message: 'Authentication required'
       };
-      return res.status(401).json(errorResponse);
+      res.status(401).json(errorResponse);
+      return;
     }
 
+    // Get user profile to check onboarding status
     const userProfile = await prisma.userProfile.findUnique({
       where: { user_id: req.user.id }
     });
@@ -132,13 +79,17 @@ export const requireOnboarding = async (req: Request, res: Response, next: NextF
     if (!userProfile || !userProfile.onboarding_completed) {
       const errorResponse: ApiResponse = {
         success: false,
-        message: 'Onboarding not completed',
-        error: 'ONBOARDING_REQUIRED'
+        message: 'Onboarding required',
+        data: {
+          onboardingStep: userProfile?.onboarding_step || 'AGE',
+          onboardingCompleted: false
+        }
       };
-      return res.status(403).json(errorResponse);
+      res.status(403).json(errorResponse);
+      return;
     }
 
-    return next();
+    next();
   } catch (error) {
     console.error('Onboarding check error:', error);
     const errorResponse: ApiResponse = {
@@ -146,6 +97,52 @@ export const requireOnboarding = async (req: Request, res: Response, next: NextF
       message: 'Failed to check onboarding status',
       error: error instanceof Error ? error.message : 'Unknown error'
     };
-    return res.status(500).json(errorResponse);
+    res.status(500).json(errorResponse);
+    return;
+  }
+};
+
+// Utility function to verify refresh token
+export const verifyRefreshToken = async (refreshToken: string): Promise<{ userId: string; email: string } | null> => {
+  try {
+    // Verify the JWT signature
+    const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET!) as any;
+    
+    // Check if refresh token exists in database and is not expired
+    const storedToken = await prisma.refreshToken.findFirst({
+      where: {
+        token: refreshToken,
+        user_id: decoded.userId,
+        expires_at: {
+          gt: new Date()
+        }
+      }
+    });
+
+    if (!storedToken) {
+      return null;
+    }
+
+    return {
+      userId: decoded.userId,
+      email: decoded.email
+    };
+  } catch (error) {
+    console.error('Refresh token verification error:', error);
+    return null;
+  }
+};
+
+// Utility function to revoke refresh token
+export const revokeRefreshToken = async (refreshToken: string): Promise<boolean> => {
+  try {
+    const result = await prisma.refreshToken.deleteMany({
+      where: { token: refreshToken }
+    });
+    
+    return result.count > 0;
+  } catch (error) {
+    console.error('Error revoking refresh token:', error);
+    return false;
   }
 }; 

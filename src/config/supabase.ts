@@ -8,10 +8,15 @@ if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error('Missing Supabase environment variables');
 }
 
-// Public client for client-side operations
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+// Storage-only client (auth disabled)
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    persistSession: false,
+    autoRefreshToken: false
+  }
+});
 
-// Admin client for server-side operations (with service role key)
+// Admin client for server-side storage operations
 export const supabaseAdmin = supabaseServiceRoleKey 
   ? createClient(supabaseUrl, supabaseServiceRoleKey, {
       auth: {
@@ -19,22 +24,4 @@ export const supabaseAdmin = supabaseServiceRoleKey
         persistSession: false
       }
     })
-  : null;
-
-// Auth configuration
-export const authConfig = {
-  providers: {
-    google: {
-      enabled: true,
-    },
-    apple: {
-      enabled: true,
-    },
-    // Disable all other providers
-    email: false,
-    phone: false,
-    github: false,
-    facebook: false,
-    twitter: false,
-  }
-}; 
+  : null; 
