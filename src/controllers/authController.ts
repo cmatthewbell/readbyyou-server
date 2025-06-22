@@ -51,26 +51,16 @@ const generateTokens = (payload: TokenPayload): AuthTokens => {
   };
 };
 
-const verifyAccessToken = (token: string): TokenPayload | null => {
-  try {
-    return jwt.verify(token, process.env.JWT_ACCESS_SECRET!) as TokenPayload;
-  } catch (error) {
-    return null;
-  }
-};
 
-const verifyRefreshToken = (token: string): TokenPayload | null => {
-  try {
-    return jwt.verify(token, process.env.JWT_REFRESH_SECRET!) as TokenPayload;
-  } catch (error) {
-    return null;
-  }
-};
 
 // Google OAuth login
-export const googleAuth = passport.authenticate('google', {
-  scope: ['profile', 'email']
-});
+export const googleAuth = (req: Request, res: Response, next: NextFunction) => {
+  // Force account selection by passing prompt=select_account to Google OAuth
+  passport.authenticate('google', {
+    scope: ['profile', 'email'],
+    prompt: 'select_account'  // This forces Google to show account selection
+  })(req, res, next);
+};
 
 // Apple OAuth login  
 export const appleAuth = passport.authenticate('apple', {
