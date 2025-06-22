@@ -9,6 +9,7 @@ import {
   getAuthStatus,
   refreshToken
 } from '../controllers/authController';
+import { updateGender } from '../controllers/onboardingController';
 import { authenticateUser, optionalAuth } from '../middleware/auth';
 
 const router = Router();
@@ -29,5 +30,8 @@ router.get('/user', authenticateUser, getUserInfo);
 router.post('/logout', logout); // Logout doesn't require auth since it just invalidates tokens
 router.post('/logout-all-devices', authenticateUser, logoutFromAllDevices); // Requires auth to know which user
 router.get('/status', optionalAuth, getAuthStatus); // Optional auth for status check
+
+// Onboarding routes (require JWT authentication)
+router.post('/onboarding/gender', authenticateUser, updateGender);
 
 export default router;

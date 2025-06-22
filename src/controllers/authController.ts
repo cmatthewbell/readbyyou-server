@@ -131,7 +131,7 @@ export const authCallback = asyncHandler(async (req: Request, res: Response, nex
           userProfile = await prisma.userProfile.create({
             data: {
               user_id: newUser.id,
-              onboarding_step: 'AGE',
+              onboarding_step: 'GENDER',
               onboarding_completed: false
             }
           });
@@ -148,7 +148,7 @@ export const authCallback = asyncHandler(async (req: Request, res: Response, nex
             userProfile = await prisma.userProfile.create({
               data: {
                 user_id: existingUser.id,
-                onboarding_step: 'AGE',
+                onboarding_step: 'GENDER',
                 onboarding_completed: false
               }
             });
@@ -187,7 +187,7 @@ export const authCallback = asyncHandler(async (req: Request, res: Response, nex
         });
         
         if (isNewUser || !userProfile.onboarding_completed) {
-          params.set('onboardingStep', userProfile.onboarding_step || 'AGE');
+          params.set('onboardingStep', userProfile.onboarding_step || 'GENDER');
         }
 
         console.log(`Redirecting to: ${baseUrl}?${params.toString()}`);

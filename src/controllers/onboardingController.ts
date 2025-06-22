@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { PrismaClient, OnboardingStep, AgeGroup, ReadingTime, ReferralSource, BookCategory } from '@prisma/client';
+import { PrismaClient, OnboardingStep, AgeGroup, ReadingTime, ReferralSource, BookCategory, Gender } from '@prisma/client';
 import { asyncHandler } from '../utils/asyncHandler';
 import { client as elevenlabs } from '../config/elevenlabs';
 import { createVoiceClone } from '../trigger/create-voice-clone';
@@ -20,6 +20,7 @@ const prisma = new PrismaClient();
 // Helper function to validate onboarding step progression
 const validateStepProgression = (currentStep: OnboardingStep, requiredStep: OnboardingStep): boolean => {
   const stepOrder = [
+    OnboardingStep.GENDER,
     OnboardingStep.AGE,
     OnboardingStep.NAME,
     OnboardingStep.CATEGORIES,
@@ -65,6 +66,7 @@ export const getOnboardingStatus = asyncHandler(async (req: AuthenticatedRequest
       currentStep: profile.onboarding_step,
       completed: profile.onboarding_completed,
       profile: {
+        gender: profile.gender,
         age_group: profile.age_group,
         first_name: profile.first_name,
         book_categories: profile.book_categories,
@@ -72,6 +74,54 @@ export const getOnboardingStatus = asyncHandler(async (req: AuthenticatedRequest
         referral_source: profile.referral_source
       },
       voices: profile.user.voices
+    }
+  });
+});
+
+// POST /auth/onboarding/gender - Submit gender selection
+export const updateGender = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const userId = req.user?.id;
+  const { gender } = req.body;
+
+  if (!gender || !Object.values(Gender).includes(gender)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Valid gender is required (male, female, other)'
+    });
+  }
+
+  const profile = await prisma.userProfile.findUnique({
+    where: { user_id: userId }
+  });
+
+  if (!profile) {
+    return res.status(404).json({
+      success: false,
+      message: 'User profile not found'
+    });
+  }
+
+  if (!validateStepProgression(profile.onboarding_step, OnboardingStep.GENDER)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid onboarding step progression'
+    });
+  }
+
+  const updatedProfile = await prisma.userProfile.update({
+    where: { user_id: userId },
+    data: {
+      gender,
+      onboarding_step: OnboardingStep.AGE
+    }
+  });
+
+  return res.status(200).json({
+    success: true,
+    message: 'Gender updated successfully',
+    data: {
+      currentStep: updatedProfile.onboarding_step,
+      gender: updatedProfile.gender
     }
   });
 });

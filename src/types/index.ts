@@ -1,4 +1,4 @@
-import { AgeGroup, ReadingTime, ReferralSource, OnboardingStep, BookCategory } from '@prisma/client';
+import { AgeGroup, ReadingTime, ReferralSource, OnboardingStep, BookCategory, Gender } from '@prisma/client';
 
 export interface ApiResponse<T = any> {
   success: boolean;
@@ -29,7 +29,7 @@ export interface RequestUser {
 }
 
 export interface OnboardingProgressRequest {
-  gender?: string;
+  gender?: Gender;
   age_group?: AgeGroup;
   first_name?: string;
   daily_reading_time?: ReadingTime;
@@ -39,7 +39,7 @@ export interface OnboardingProgressRequest {
 }
 
 export interface OnboardingCompleteRequest {
-  gender: string;
+  gender: Gender;
   age_group: AgeGroup;
   first_name: string;
   daily_reading_time: ReadingTime;
@@ -51,7 +51,7 @@ export interface OnboardingStatusResponse {
   onboarding_completed: boolean;
   current_step: OnboardingStep;
   profile?: {
-    gender?: string;
+    gender?: Gender;
     age_group?: AgeGroup;
     first_name?: string;
     daily_reading_time?: ReadingTime;

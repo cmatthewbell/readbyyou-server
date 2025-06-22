@@ -24,6 +24,12 @@ enum AgeGroup {
   SEVENTY_PLUS @map("70_and_above")
 }
 
+enum Gender {
+  MALE   @map("male")
+  FEMALE @map("female")
+  OTHER  @map("other")
+}
+
 enum ReadingTime {
   LESS_THAN_15  @map("less_than_15")
   FIFTEEN_TO_30 @map("15_to_30")
@@ -42,6 +48,7 @@ enum ReferralSource {
 }
 
 enum OnboardingStep {
+  GENDER        @map("gender")
   AGE           @map("age")
   NAME          @map("name")
   CATEGORIES    @map("categories")
@@ -105,6 +112,7 @@ model UserProfile {
   user    User   @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   // Onboarding fields
+  gender             Gender?
   age_group          AgeGroup?
   first_name         String?
   book_categories    BookCategory[] // Array of selected categories
@@ -112,7 +120,7 @@ model UserProfile {
   referral_source    ReferralSource?
 
   // Progress tracking
-  onboarding_step      OnboardingStep @default(AGE)
+  onboarding_step      OnboardingStep @default(GENDER)
   onboarding_completed Boolean        @default(false)
 
   created_at DateTime @default(now())
