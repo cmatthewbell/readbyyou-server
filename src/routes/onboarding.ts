@@ -10,7 +10,8 @@ import {
   generateVoiceDemo,
   completeVoiceDemo,
   handlePremiumTrial,
-  completeOnboarding
+  completeOnboarding,
+  goBackToPreviousStep
 } from '../controllers/onboardingController';
 import { authenticateUser } from '../middleware/auth';
 
@@ -18,6 +19,7 @@ const router = Router();
 
 // All onboarding routes require JWT authentication
 router.get('/status', authenticateUser, getOnboardingStatus);
+router.post('/back', authenticateUser, goBackToPreviousStep);
 router.post('/gender', authenticateUser, updateGender);
 router.post('/age-group', authenticateUser, updateAgeGroup);
 router.post('/name', authenticateUser, updateName);

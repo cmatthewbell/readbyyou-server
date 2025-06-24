@@ -738,4 +738,68 @@ export const completeOnboarding = asyncHandler(async (req: AuthenticatedRequest,
       referral_source: updatedProfile.referral_source
     }
   });
+});
+
+// POST /onboarding/back - Go back to previous onboarding step
+export const goBackToPreviousStep = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const userId = req.user?.id;
+
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      message: 'User not authenticated'
+    });
+  }
+
+  const profile = await prisma.userProfile.findUnique({
+    where: { user_id: userId }
+  });
+
+  if (!profile) {
+    return res.status(404).json({
+      success: false,
+      message: 'User profile not found'
+    });
+  }
+
+  const stepOrder = [
+    OnboardingStep.GENDER,
+    OnboardingStep.AGE,
+    OnboardingStep.NAME,
+    OnboardingStep.CATEGORIES,
+    OnboardingStep.READING_TIME,
+    OnboardingStep.VOICE,
+    OnboardingStep.VOICE_DEMO,
+    OnboardingStep.PREMIUM_TRIAL,
+    OnboardingStep.REFERRAL,
+    OnboardingStep.COMPLETED
+  ];
+
+  const currentIndex = stepOrder.indexOf(profile.onboarding_step);
+  
+  // Can't go back from GENDER (first step), REFERRAL (final step), or COMPLETED
+  if (currentIndex <= 0 || profile.onboarding_step === OnboardingStep.REFERRAL || profile.onboarding_step === OnboardingStep.COMPLETED) {
+    return res.status(400).json({
+      success: false,
+      message: 'Cannot go back from this step'
+    });
+  }
+
+  const previousStep = stepOrder[currentIndex - 1];
+
+  const updatedProfile = await prisma.userProfile.update({
+    where: { user_id: userId },
+    data: {
+      onboarding_step: previousStep
+    }
+  });
+
+  return res.status(200).json({
+    success: true,
+    message: 'Successfully went back to previous step',
+    data: {
+      currentStep: updatedProfile.onboarding_step,
+      previousStep: profile.onboarding_step
+    }
+  });
 }); 
