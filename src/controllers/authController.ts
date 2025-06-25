@@ -325,6 +325,12 @@ export const getUserInfo = asyncHandler(async (req: Request, res: Response): Pro
         created_at: user.created_at
       },
       profile: user.profile ? {
+        first_name: user.profile.first_name,
+        gender: user.profile.gender,
+        age_group: user.profile.age_group,
+        book_categories: user.profile.book_categories,
+        daily_reading_time: user.profile.daily_reading_time,
+        referral_source: user.profile.referral_source,
         onboarding_completed: user.profile.onboarding_completed,
         onboarding_step: user.profile.onboarding_step
       } : null
