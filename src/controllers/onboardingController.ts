@@ -25,6 +25,7 @@ const validateStepProgression = (currentStep: OnboardingStep, requiredStep: Onbo
     OnboardingStep.NAME,
     OnboardingStep.CATEGORIES,
     OnboardingStep.READING_TIME,
+    OnboardingStep.READING_STAT,
     OnboardingStep.VOICE,
     OnboardingStep.VOICE_DEMO,
     OnboardingStep.PREMIUM_TRIAL,
@@ -315,7 +316,7 @@ export const updateReadingTime = asyncHandler(async (req: AuthenticatedRequest, 
     where: { user_id: userId },
     data: {
       daily_reading_time,
-      onboarding_step: OnboardingStep.VOICE
+      onboarding_step: OnboardingStep.READING_STAT
     }
   });
 
@@ -325,6 +326,51 @@ export const updateReadingTime = asyncHandler(async (req: AuthenticatedRequest, 
     data: {
       currentStep: updatedProfile.onboarding_step,
       daily_reading_time: updatedProfile.daily_reading_time
+    }
+  });
+});
+
+// POST /auth/onboarding/reading-stat - Complete reading stat step and progress to voice
+export const updateReadingStat = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const userId = req.user?.id;
+
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      message: 'User not authenticated'
+    });
+  }
+
+  const profile = await prisma.userProfile.findUnique({
+    where: { user_id: userId }
+  });
+
+  if (!profile) {
+    return res.status(404).json({
+      success: false,
+      message: 'User profile not found'
+    });
+  }
+
+  if (!validateStepProgression(profile.onboarding_step, OnboardingStep.READING_STAT)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid onboarding step progression'
+    });
+  }
+
+  const updatedProfile = await prisma.userProfile.update({
+    where: { user_id: userId },
+    data: {
+      onboarding_step: OnboardingStep.VOICE
+    }
+  });
+
+  return res.status(200).json({
+    success: true,
+    message: 'Reading stat step completed successfully',
+    data: {
+      currentStep: updatedProfile.onboarding_step
     }
   });
 });
@@ -768,6 +814,7 @@ export const goBackToPreviousStep = asyncHandler(async (req: AuthenticatedReques
     OnboardingStep.NAME,
     OnboardingStep.CATEGORIES,
     OnboardingStep.READING_TIME,
+    OnboardingStep.READING_STAT,
     OnboardingStep.VOICE,
     OnboardingStep.VOICE_DEMO,
     OnboardingStep.PREMIUM_TRIAL,
