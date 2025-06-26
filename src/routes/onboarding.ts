@@ -7,6 +7,7 @@ import {
   updateBookCategories,
   updateReadingTime,
   updateReadingStat,
+  updateNotificationPage,
   updateVoice,
   generateVoiceDemo,
   completeVoiceDemo,
@@ -27,6 +28,7 @@ router.post('/name', authenticateUser, updateName);
 router.post('/book-categories', authenticateUser, updateBookCategories);
 router.post('/reading-time', authenticateUser, updateReadingTime);
 router.post('/reading-stat', authenticateUser, updateReadingStat);
+router.post('/notification-page', authenticateUser, updateNotificationPage);
 router.post('/voice', authenticateUser, updateVoice);
 router.post('/voice-demo/generate', authenticateUser, generateVoiceDemo);
 router.post('/voice-demo', authenticateUser, completeVoiceDemo);

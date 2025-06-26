@@ -48,17 +48,18 @@ enum ReferralSource {
 }
 
 enum OnboardingStep {
-  GENDER        @map("gender")
-  AGE           @map("age")
-  NAME          @map("name")
-  CATEGORIES    @map("categories")
-  READING_TIME  @map("reading_time")
-  READING_STAT  @map("reading_stat")
-  VOICE         @map("voice")
-  VOICE_DEMO    @map("voice_demo")
-  PREMIUM_TRIAL @map("premium_trial")
-  REFERRAL      @map("referral")
-  COMPLETED     @map("completed")
+  GENDER            @map("gender")
+  AGE               @map("age")
+  NAME              @map("name")
+  CATEGORIES        @map("categories")
+  READING_TIME      @map("reading_time")
+  READING_STAT      @map("reading_stat")
+  NOTIFICATION_PAGE @map("notification_page")
+  VOICE             @map("voice")
+  VOICE_DEMO        @map("voice_demo")
+  PREMIUM_TRIAL     @map("premium_trial")
+  REFERRAL          @map("referral")
+  COMPLETED         @map("completed")
 }
 
 enum BookCategory {

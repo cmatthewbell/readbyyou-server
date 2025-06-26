@@ -26,6 +26,7 @@ const validateStepProgression = (currentStep: OnboardingStep, requiredStep: Onbo
     OnboardingStep.CATEGORIES,
     OnboardingStep.READING_TIME,
     OnboardingStep.READING_STAT,
+    OnboardingStep.NOTIFICATION_PAGE,
     OnboardingStep.VOICE,
     OnboardingStep.VOICE_DEMO,
     OnboardingStep.PREMIUM_TRIAL,
@@ -362,13 +363,58 @@ export const updateReadingStat = asyncHandler(async (req: AuthenticatedRequest, 
   const updatedProfile = await prisma.userProfile.update({
     where: { user_id: userId },
     data: {
-      onboarding_step: OnboardingStep.VOICE
+      onboarding_step: OnboardingStep.NOTIFICATION_PAGE
     }
   });
 
   return res.status(200).json({
     success: true,
     message: 'Reading stat step completed successfully',
+    data: {
+      currentStep: updatedProfile.onboarding_step
+    }
+  });
+});
+
+// POST /auth/onboarding/notification-page - Complete notification page step and progress to voice
+export const updateNotificationPage = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const userId = req.user?.id;
+
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      message: 'User not authenticated'
+    });
+  }
+
+  const profile = await prisma.userProfile.findUnique({
+    where: { user_id: userId }
+  });
+
+  if (!profile) {
+    return res.status(404).json({
+      success: false,
+      message: 'User profile not found'
+    });
+  }
+
+  if (!validateStepProgression(profile.onboarding_step, OnboardingStep.NOTIFICATION_PAGE)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid onboarding step progression'
+    });
+  }
+
+  const updatedProfile = await prisma.userProfile.update({
+    where: { user_id: userId },
+    data: {
+      onboarding_step: OnboardingStep.VOICE
+    }
+  });
+
+  return res.status(200).json({
+    success: true,
+    message: 'Notification page step completed successfully',
     data: {
       currentStep: updatedProfile.onboarding_step
     }
@@ -815,6 +861,7 @@ export const goBackToPreviousStep = asyncHandler(async (req: AuthenticatedReques
     OnboardingStep.CATEGORIES,
     OnboardingStep.READING_TIME,
     OnboardingStep.READING_STAT,
+    OnboardingStep.NOTIFICATION_PAGE,
     OnboardingStep.VOICE,
     OnboardingStep.VOICE_DEMO,
     OnboardingStep.PREMIUM_TRIAL,
