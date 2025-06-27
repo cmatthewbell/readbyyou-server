@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import multer from 'multer';
 import { 
   getOnboardingStatus,
   updateGender,
@@ -9,13 +10,19 @@ import {
   updateReadingStat,
   updateNotificationPage,
   updateVoice,
-  generateVoiceDemo,
   completeVoiceDemo,
+  getVoiceDemo,
   handlePremiumTrial,
   completeOnboarding,
   goBackToPreviousStep
 } from '../controllers/onboardingController';
 import { authenticateUser } from '../middleware/auth';
+
+// Multer configuration for file uploads
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit
+});
 
 const router = Router();
 
@@ -29,8 +36,8 @@ router.post('/book-categories', authenticateUser, updateBookCategories);
 router.post('/reading-time', authenticateUser, updateReadingTime);
 router.post('/reading-stat', authenticateUser, updateReadingStat);
 router.post('/notification-page', authenticateUser, updateNotificationPage);
-router.post('/voice', authenticateUser, updateVoice);
-router.post('/voice-demo/generate', authenticateUser, generateVoiceDemo);
+router.post('/voice', authenticateUser, upload.single('audioFile'), updateVoice);
+router.get('/voice-demo', authenticateUser, getVoiceDemo);
 router.post('/voice-demo', authenticateUser, completeVoiceDemo);
 router.post('/premium-trial', authenticateUser, handlePremiumTrial);
 router.post('/referral-source', authenticateUser, completeOnboarding);

@@ -13,6 +13,7 @@ interface AuthenticatedRequest extends Request {
     provider_id: string;
   };
   files?: any[];
+  file?: any; // For single file uploads with multer
 }
 
 const prisma = new PrismaClient();
@@ -27,8 +28,6 @@ const validateStepProgression = (currentStep: OnboardingStep, requiredStep: Onbo
     OnboardingStep.READING_TIME,
     OnboardingStep.READING_STAT,
     OnboardingStep.NOTIFICATION_PAGE,
-    OnboardingStep.VOICE,
-    OnboardingStep.VOICE_DEMO,
     OnboardingStep.PREMIUM_TRIAL,
     OnboardingStep.REFERRAL,
     OnboardingStep.COMPLETED
@@ -408,7 +407,7 @@ export const updateNotificationPage = asyncHandler(async (req: AuthenticatedRequ
   const updatedProfile = await prisma.userProfile.update({
     where: { user_id: userId },
     data: {
-      onboarding_step: OnboardingStep.VOICE
+      onboarding_step: OnboardingStep.PREMIUM_TRIAL
     }
   });
 
@@ -433,7 +432,13 @@ export const updateVoice = asyncHandler(async (req: AuthenticatedRequest, res: R
   }
   
   const { voice_name } = req.body;
-  const audioFiles = req.files;
+  
+  // Debug logging
+  console.log('DEBUG - voice_name:', voice_name);
+  console.log('DEBUG - req.body:', req.body);
+  console.log('DEBUG - req.file:', req.file);
+  
+  const audioFile = req.file;
 
   if (!voice_name || typeof voice_name !== 'string' || voice_name.trim().length === 0) {
     return res.status(400).json({
@@ -442,21 +447,12 @@ export const updateVoice = asyncHandler(async (req: AuthenticatedRequest, res: R
     });
   }
 
-  if (!audioFiles || !Array.isArray(audioFiles) || audioFiles.length === 0) {
+  if (!audioFile) {
     return res.status(400).json({
       success: false,
       message: 'Audio file is required'
     });
   }
-
-  if (audioFiles.length > 1) {
-    return res.status(400).json({
-      success: false,
-      message: 'Only one audio file allowed for voice cloning'
-    });
-  }
-
-  const audioFile = audioFiles[0];
 
   const profile = await prisma.userProfile.findUnique({
     where: { user_id: userId }
@@ -469,12 +465,7 @@ export const updateVoice = asyncHandler(async (req: AuthenticatedRequest, res: R
     });
   }
 
-  if (!validateStepProgression(profile.onboarding_step, OnboardingStep.VOICE)) {
-    return res.status(400).json({
-      success: false,
-      message: 'Invalid onboarding step progression'
-    });
-  }
+  // Voice endpoint is now standalone - no onboarding step validation
 
   try {
     // Use trigger task to create voice clone
@@ -521,19 +512,10 @@ export const updateVoice = asyncHandler(async (req: AuthenticatedRequest, res: R
       }
     });
 
-    // Update onboarding step
-    await prisma.userProfile.update({
-      where: { user_id: userId },
-      data: {
-        onboarding_step: OnboardingStep.VOICE_DEMO
-      }
-    });
-
     return res.status(200).json({
       success: true,
       message: 'Voice created and cloned successfully with ElevenLabs',
       data: {
-        currentStep: OnboardingStep.VOICE_DEMO,
         voice: {
           id: voice.id,
           voice_name: voice.voice_name,
@@ -557,19 +539,10 @@ export const updateVoice = asyncHandler(async (req: AuthenticatedRequest, res: R
       }
     });
 
-    // Update onboarding step even if voice cloning failed
-    await prisma.userProfile.update({
-      where: { user_id: userId },
-      data: {
-        onboarding_step: OnboardingStep.VOICE_DEMO
-      }
-    });
-
     return res.status(207).json({
       success: true,
       message: 'Voice saved but cloning failed. Please try again later.',
       data: {
-        currentStep: OnboardingStep.VOICE_DEMO,
         voice: {
           id: voice.id,
           voice_name: voice.voice_name,
@@ -581,8 +554,8 @@ export const updateVoice = asyncHandler(async (req: AuthenticatedRequest, res: R
   }
 });
 
-// POST /auth/onboarding/voice-demo/generate - Generate voice demo audio
-export const generateVoiceDemo = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+// POST /auth/onboarding/voice-demo - Generate voice demo and complete step
+export const completeVoiceDemo = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
   const userId = req.user?.id;
 
   if (!userId) {
@@ -603,12 +576,7 @@ export const generateVoiceDemo = asyncHandler(async (req: AuthenticatedRequest, 
     });
   }
 
-  if (!validateStepProgression(profile.onboarding_step, OnboardingStep.VOICE_DEMO)) {
-    return res.status(400).json({
-      success: false,
-      message: 'Invalid onboarding step progression'
-    });
-  }
+  // Voice demo endpoint is now standalone - no onboarding step validation
 
   // Get user's voice clone
   const userVoice = await prisma.userVoice.findFirst({
@@ -632,7 +600,7 @@ export const generateVoiceDemo = asyncHandler(async (req: AuthenticatedRequest, 
     // Generate audio using ElevenLabs TTS with user's voice clone
     const audio = await elevenlabs.textToSpeech.convert(userVoice.elevenlabs_voice_id, {
       text: demoText,
-      modelId: "eleven_multilingual_v2",
+      modelId: "eleven_v3",
       voiceSettings: {
         stability: 0.95,
         similarityBoost: 0.75,
@@ -656,14 +624,6 @@ export const generateVoiceDemo = asyncHandler(async (req: AuthenticatedRequest, 
     const audioBuffer = Buffer.concat(chunks);
     const base64Audio = audioBuffer.toString('base64');
 
-    // Mark voice demo step as completed and progress to premium trial
-    await prisma.userProfile.update({
-      where: { user_id: userId },
-      data: {
-        onboarding_step: OnboardingStep.PREMIUM_TRIAL
-      }
-    });
-
     return res.status(200).json({
       success: true,
       message: 'Voice demo generated successfully',
@@ -671,8 +631,7 @@ export const generateVoiceDemo = asyncHandler(async (req: AuthenticatedRequest, 
         audio_base64: base64Audio,
         text: demoText,
         voice_name: userVoice.voice_name,
-        duration_estimate: Math.ceil(demoText.length / 10), // Rough estimate: ~10 chars per second
-        currentStep: OnboardingStep.PREMIUM_TRIAL
+        duration_estimate: Math.ceil(demoText.length / 10) // Rough estimate: ~10 chars per second
       }
     });
 
@@ -687,42 +646,83 @@ export const generateVoiceDemo = asyncHandler(async (req: AuthenticatedRequest, 
   }
 });
 
-// POST /auth/onboarding/voice-demo - Mark voice demo as completed
-export const completeVoiceDemo = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+// GET /auth/onboarding/voice-demo - Get voice demo audio again
+export const getVoiceDemo = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
   const userId = req.user?.id;
 
-  const profile = await prisma.userProfile.findUnique({
-    where: { user_id: userId }
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      message: 'User not authenticated'
+    });
+  }
+
+  // Get user's voice clone
+  const userVoice = await prisma.userVoice.findFirst({
+    where: { 
+      user_id: userId,
+      is_default: true 
+    }
   });
 
-  if (!profile) {
+  if (!userVoice) {
     return res.status(404).json({
       success: false,
-      message: 'User profile not found'
+      message: 'No voice clone found. Please complete voice setup first.'
     });
   }
 
-  if (!validateStepProgression(profile.onboarding_step, OnboardingStep.VOICE_DEMO)) {
-    return res.status(400).json({
+  // Demo text passage - same as the original demo
+  const demoText = `The magic thrummed through her veins like liquid fire. With a whispered incantation, she opened the portal to another world. Beyond the shimmering gateway, ancient forests beckoned with promises of adventure and secrets long forgotten.`;
+
+  try {
+    // Generate audio using ElevenLabs TTS with user's voice clone
+    const audio = await elevenlabs.textToSpeech.convert(userVoice.elevenlabs_voice_id, {
+      text: demoText,
+      modelId: "eleven_v3",
+      voiceSettings: {
+        stability: 0.95,
+        similarityBoost: 0.75,
+        style: 0.06,
+        useSpeakerBoost: true
+      }
+    });
+
+    // Convert audio stream to buffer
+    const chunks: Buffer[] = [];
+    
+    audio.on('data', (chunk: Buffer) => {
+      chunks.push(chunk);
+    });
+    
+    await new Promise((resolve, reject) => {
+      audio.on('end', resolve);
+      audio.on('error', reject);
+    });
+    
+    const audioBuffer = Buffer.concat(chunks);
+    const base64Audio = audioBuffer.toString('base64');
+
+    return res.status(200).json({
+      success: true,
+      message: 'Voice demo retrieved successfully',
+      data: {
+        audio_base64: base64Audio,
+        text: demoText,
+        voice_name: userVoice.voice_name,
+        duration_estimate: Math.ceil(demoText.length / 10) // Rough estimate: ~10 chars per second
+      }
+    });
+
+  } catch (error: any) {
+    console.error('ElevenLabs TTS Error:', error);
+    
+    return res.status(500).json({
       success: false,
-      message: 'Invalid onboarding step progression'
+      message: 'Failed to retrieve voice demo. Please try again.',
+      error: error.message || 'Unknown error'
     });
   }
-
-  const updatedProfile = await prisma.userProfile.update({
-    where: { user_id: userId },
-    data: {
-      onboarding_step: OnboardingStep.PREMIUM_TRIAL
-    }
-  });
-
-  return res.status(200).json({
-    success: true,
-    message: 'Voice demo completed',
-    data: {
-      currentStep: updatedProfile.onboarding_step
-    }
-  });
 });
 
 // POST /auth/onboarding/premium-trial - Handle premium subscription signup via RevenueCat
@@ -862,8 +862,6 @@ export const goBackToPreviousStep = asyncHandler(async (req: AuthenticatedReques
     OnboardingStep.READING_TIME,
     OnboardingStep.READING_STAT,
     OnboardingStep.NOTIFICATION_PAGE,
-    OnboardingStep.VOICE,
-    OnboardingStep.VOICE_DEMO,
     OnboardingStep.PREMIUM_TRIAL,
     OnboardingStep.REFERRAL,
     OnboardingStep.COMPLETED

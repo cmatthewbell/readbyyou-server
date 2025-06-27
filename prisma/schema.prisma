@@ -55,8 +55,6 @@ enum OnboardingStep {
   READING_TIME      @map("reading_time")
   READING_STAT      @map("reading_stat")
   NOTIFICATION_PAGE @map("notification_page")
-  VOICE             @map("voice")
-  VOICE_DEMO        @map("voice_demo")
   PREMIUM_TRIAL     @map("premium_trial")
   REFERRAL          @map("referral")
   COMPLETED         @map("completed")
