@@ -91,6 +91,7 @@ model User {
   voices        UserVoice[]
   books         Book[]
   refreshTokens RefreshToken[]
+  subscription  Subscription?
 
   @@map("users")
 }
@@ -171,4 +172,28 @@ model Book {
   updated_at DateTime @updatedAt
 
   @@map("books")
+}
+
+model Subscription {
+  id      String @id @default(uuid())
+  user_id String @unique
+  user    User   @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  // RevenueCat integration
+  revenuecat_user_id String @unique // Maps to event.app_user_id from RevenueCat
+
+  // Subscription status
+  is_active  Boolean   @default(false)
+  expires_at DateTime?
+  plan_type  String? // e.g., "premium_monthly", "premium_yearly"
+
+  // Tracking
+  renewal_count   Int       @default(0)
+  last_renewal_at DateTime?
+
+  // Metadata
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@map("subscriptions")
 }

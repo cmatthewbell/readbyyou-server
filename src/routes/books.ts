@@ -1,32 +1,31 @@
 import { Router } from 'express';
-import { createBook, getUserBooks, getBook, deleteBook, streamBookAudio, updateBookProgress, addPagesToBook, changeBookVoice } from '../controllers/bookController';
 import { authenticateUser } from '../middleware/auth';
-import { requireSubscription } from '../middleware/subscription';
+import { requireActiveSubscription } from '../middleware/subscription';
+import { getUserBooks, getBook, streamBookAudio, updateBookProgress, addPagesToBook, changeBookVoice, deleteBook, createBook } from '../controllers/bookController';
 
 const router = Router();
 
-// GET /books - Get all books for authenticated user with pagination
-router.get('/', authenticateUser, requireSubscription, getUserBooks);
+router.get('/', authenticateUser, requireActiveSubscription, getUserBooks);
 
-// GET /books/:id - Get a single book by ID
-router.get('/:id', authenticateUser, requireSubscription, getBook);
+// Get specific book
+router.get('/:id', authenticateUser, requireActiveSubscription, getBook);
 
-// GET /books/:id/stream - Stream book audio with range request support
-router.get('/:id/stream', authenticateUser, requireSubscription, streamBookAudio);
+// Stream book audio
+router.get('/:id/stream', authenticateUser, requireActiveSubscription, streamBookAudio);
 
-// PATCH /books/:id/progress - Update book listening progress
-router.patch('/:id/progress', authenticateUser, requireSubscription, updateBookProgress);
+// Update book progress
+router.patch('/:id/progress', authenticateUser, requireActiveSubscription, updateBookProgress);
 
-// POST /books/:id/add-pages - Add pages to an existing book
-router.post('/:id/add-pages', authenticateUser, requireSubscription, addPagesToBook);
+// Add pages to book
+router.post('/:id/add-pages', authenticateUser, requireActiveSubscription, addPagesToBook);
 
-// POST /books/:id/change-voice - Change the voice of an existing book
-router.post('/:id/change-voice', authenticateUser, requireSubscription, changeBookVoice);
+// Change book voice
+router.post('/:id/change-voice', authenticateUser, requireActiveSubscription, changeBookVoice);
 
-// DELETE /books/:id - Delete a book and all its associated storage
-router.delete('/:id', authenticateUser, requireSubscription, deleteBook);
+// Delete book
+router.delete('/:id', authenticateUser, requireActiveSubscription, deleteBook);
 
-// POST /books/create - Create a new book from images (requires authentication)
-router.post('/create', authenticateUser, requireSubscription, createBook);
+// Create new book
+router.post('/create', authenticateUser, requireActiveSubscription, createBook);
 
 export default router; 
